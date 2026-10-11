@@ -54,6 +54,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Vendor engine into web tree
+        run: |
+          bash ../tools/sync-vendor.sh
+          test -f ../app/vendor/engine/index.js || { echo "::error::engine vendor failed"; exit 1; }
+          test -f ../app/vendor/server/prompt.js || { echo "::error::prompt vendor failed"; exit 1; }
+
       - name: Verify web assets present
         run: |
           if [ ! -f ../app/index.html ]; then
@@ -61,6 +67,7 @@ jobs:
             exit 1
           fi
           node --check ../app/app.js && echo "app.js syntax OK"
+          node --check ../app/migrate.js && echo "migrate.js syntax OK"
 
       - name: Add Android platform
         run: |
