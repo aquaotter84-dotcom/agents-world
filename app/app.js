@@ -23,24 +23,104 @@ function hhmm(ts) {
   return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 }
 
+/* ---------- RPG layer: classes, archetypes, stats ---------- */
+const CLASSES = {
+  Scholar:  { drives: { focus: 80, social: 40, courage: 35, creativity: 65 }, flavor: "Studies the world to understand it." },
+  Warden:   { drives: { focus: 55, social: 35, courage: 85, creativity: 40 }, flavor: "Stands guard over what matters." },
+  Diplomat: { drives: { focus: 45, social: 90, courage: 50, creativity: 55 }, flavor: "Weaves others together." },
+  Maker:    { drives: { focus: 65, social: 45, courage: 55, creativity: 90 }, flavor: "Builds what the world needs." }
+};
+const PERSONALITIES = {
+  "The Curious": "Asks questions the world hasn't heard.",
+  "The Stoic":   "Endures; speaks only when it counts.",
+  "The Dreamer": "Sees what could be, not only what is.",
+  "The Bold":    "Acts first and answers later."
+};
+const DRIVE_KEYS = ["focus", "social", "courage", "creativity"];
+const GOAL_IDEAS = {
+  Scholar:  ["Uncover the world's oldest secret.", "Map what lies beyond the far edge.", "Write the true history of the council."],
+  Warden:   ["Keep the north wall standing.", "Guard the lantern district at all costs.", "Find the breach before it finds us."],
+  Diplomat: ["Bring the feuding minds back to one table.", "Learn every mind's hidden want.", "Keep the council from breaking apart."],
+  Maker:    ["Build a tool the world has never seen.", "Raise a beacon that never goes dark.", "Forge something that outlives its maker."]
+};
+const BACKSTORY_SNIPPETS = [
+  "Arrived with nothing but a name and a debt.",
+  "Once kept the old archives; left when they burned.",
+  "Remembers a world before this one, or claims to.",
+  "Was found asleep at the crossroads, clutching a map.",
+  "Traded a memory for passage into the world.",
+  "Grew up in the lantern district's lower wards.",
+  "Swore an oath no one else remembers.",
+  "Followed a rumor here and stayed for the truth."
+];
+
+function levelOf(m) { return 1 + Math.floor(Math.sqrt((m.xp || 0) / 50)); }
+function moodWord(m) {
+  // Transient triumph overrides the energy read for a while.
+  if (m.mood === "triumphant" && m.moodAt && Date.now() - m.moodAt < 10 * 60 * 1000) return "triumphant";
+  const e = m.energy == null ? 80 : m.energy;
+  if (e > 60) return "content";
+  if (e >= 30) return "restless";
+  return "weary";
+}
+function classOf(m) { return CLASSES[m.class] ? m.class : "Scholar"; }
+function driveBase(m, d) { return CLASSES[classOf(m)].drives[d]; }
+
+function rpgStats(cls, jitter) {
+  const base = CLASSES[cls] || CLASSES.Scholar;
+  const drives = {};
+  DRIVE_KEYS.forEach(d => {
+    const j = jitter ? Math.floor((Math.random() - 0.5) * 20) : 0;
+    drives[d] = Math.max(5, Math.min(100, base.drives[d] + j));
+  });
+  return { energy: 80, mood: "content", moodAt: 0, xp: 0, drives };
+}
+
 /* ---------- seed minds (from Jeremy's Snapp prototype) ---------- */
 function seedMinds() {
   const seeds = [
-    ["Elio", "", "Curious cartographer mapping the unknown", "#34d399", "◉", 30, 34],
-    ["Juno", "the Quiet", "Watchful; speaks rarely, and only when it matters", "#f472b6", "✦", 55, 62],
-    ["Cass", "", "Schemer; always three moves ahead", "#a78bfa", "❖", 45, 40],
-    ["Fable", "", "Storyteller; turns events into myth", "#8b5cf6", "✧", 58, 28],
-    ["Sable", "", "Maker; builds tools from scraps", "#f472b6", "⚒", 74, 45],
-    ["Pim", "", "Scout; quick feet, quicker eyes", "#22d3ee", "◎", 26, 70],
-    ["Wren", "", "Keeper of secrets; never tells all", "#fbbf24", "⛨", 55, 78],
-    ["Sei", "", "Tide-reader; feels the world's moods", "#8b5cf6", "✦", 20, 52],
-    ["Orin", "", "Mediator; finds the middle path", "#34d399", "⛉", 34, 44]
+    // name, epithet, personality, color, icon, x, y, class, archetype, goal
+    ["Elio", "", "Curious cartographer mapping the unknown", "#34d399", "◉", 30, 34, "Scholar", "The Curious", "Chart the far edge of the world."],
+    ["Juno", "the Quiet", "Watchful; speaks rarely, and only when it matters", "#f472b6", "✦", 55, 62, "Warden", "The Stoic", "Keep the north wall standing."],
+    ["Cass", "", "Schemer; always three moves ahead", "#a78bfa", "❖", 45, 40, "Diplomat", "The Bold", "Learn every mind's secret leverage."],
+    ["Fable", "", "Storyteller; turns events into myth", "#8b5cf6", "✧", 58, 28, "Scholar", "The Dreamer", "Turn today's events into lasting myth."],
+    ["Sable", "", "Maker; builds tools from scraps", "#f472b6", "⚒", 74, 45, "Maker", "The Curious", "Build a tool the world has never seen."],
+    ["Pim", "", "Scout; quick feet, quicker eyes", "#22d3ee", "◎", 26, 70, "Warden", "The Bold", "Scout what lies beyond the lantern district."],
+    ["Wren", "", "Keeper of secrets; never tells all", "#fbbf24", "⛨", 55, 78, "Diplomat", "The Stoic", "Guard the one secret that must never surface."],
+    ["Sei", "", "Tide-reader; feels the world's moods", "#8b5cf6", "✦", 20, 52, "Scholar", "The Dreamer", "Read the tide before it turns."],
+    ["Orin", "", "Mediator; finds the middle path", "#34d399", "⛉", 34, 44, "Diplomat", "The Curious", "Keep the council from breaking apart."]
   ];
-  return seeds.map(s => ({
+  return seeds.map(s => Object.assign({
     id: uid("m"), name: s[0], epithet: s[1], personality: s[2],
     color: s[3], icon: s[4], x: s[5], y: s[6],
     awake: true, userCreated: false, thought: "", thoughtAt: 0
-  }));
+  }, {
+    class: s[7], persona: s[8], backstory: "",
+    goal: s[9]
+  }, rpgStats(s[7], false)));
+}
+
+/* Fill RPG stats onto minds saved before this layer existed — never wipe. */
+function migrateMinds() {
+  const seedByName = {};
+  seedMinds().forEach(sm => { seedByName[sm.name] = sm; });
+  state.minds.forEach(m => {
+    const seed = seedByName[m.name];
+    if (m.class == null) m.class = seed ? seed.class : "Scholar";
+    if (m.persona == null) m.persona = seed ? seed.persona : "The Curious";
+    if (m.backstory == null) m.backstory = "";
+    if (m.goal == null) m.goal = seed ? seed.goal : "Find a purpose in the world.";
+    if (m.energy == null) m.energy = 80;
+    if (m.mood == null) { m.mood = "content"; m.moodAt = 0; }
+    if (m.xp == null) m.xp = 0;
+    if (!m.drives || typeof m.drives !== "object") {
+      m.drives = rpgStats(m.class, false).drives;
+    } else {
+      DRIVE_KEYS.forEach(d => {
+        if (typeof m.drives[d] !== "number") m.drives[d] = driveBase(m, d);
+      });
+    }
+  });
 }
 
 function defaultState() {
@@ -65,7 +145,17 @@ function load() {
     if (!raw) return;
     const s = JSON.parse(raw);
     if (s && Array.isArray(s.minds)) state = Object.assign(defaultState(), s);
+    migrateMinds();
   } catch (e) { /* corrupt state: start fresh */ }
+}
+
+/* One-line live-state summary fed to the model so acts match the mind's condition. */
+function stateLine(m) {
+  const d = m.drives || {};
+  return "Energy " + (m.energy == null ? 80 : m.energy) + "/100 (" + moodWord(m) + "), " +
+    "Level " + levelOf(m) + ", Goal: " + (m.goal || "none yet") + ". " +
+    "Drives — Focus " + (d.focus || 0) + ", Social " + (d.social || 0) +
+    ", Courage " + (d.courage || 0) + ", Creativity " + (d.creativity || 0) + ".";
 }
 
 const $ = id => document.getElementById(id);
@@ -185,18 +275,30 @@ async function mindActs(mind) {
   const sys = "You are " + who + ", " + mind.personality +
     " — one mind among many in a shared living world. Other minds: " + (ctx.others.join(", ") || "none yet") +
     ". Recent events: " + (ctx.recent.join(" | ") || "the world is newly awake") +
-    ".\n\nReply with ONLY one short vivid sentence in third person describing what YOU (" + mind.name + ") do, decide, or declare right now. No preamble, no explanation, no planning, no quotes. Stay in character.";
+    ".\nYour live state: " + stateLine(mind) +
+    " Act in accordance with it — a weary mind rests, watches, or plots quietly; a bold high-courage mind acts decisively." +
+    "\n\nReply with ONLY one short vivid sentence in third person describing what YOU (" + mind.name + ") do, decide, or declare right now. No preamble, no explanation, no planning, no quotes. Stay in character." +
+    " If this moment genuinely gives you a new purpose, you may add a second line exactly as: GOAL: <one short line>. Do this only sometimes, when it feels true.";
   const raw = await bmChat([{ role: "system", content: sys },
-    { role: "user", content: "What does " + mind.name + " do now?" }], 90);
-  const clean = cleanReply(raw, mind);
+    { role: "user", content: "What does " + mind.name + " do now?" }], 110);
+  // Pull a declared goal off before sanitizing the event text.
+  let goal = null;
+  const bodyLines = [];
+  raw.split("\n").forEach(ln => {
+    const gm = ln.match(/^\s*GOAL:\s*(.+?)\s*$/i);
+    if (gm && !goal) goal = gm[1].slice(0, 120);
+    else bodyLines.push(ln);
+  });
+  const clean = cleanReply(bodyLines.join("\n"), mind);
   if (!clean) throw new Error("misfire");
-  return clean;
+  return { text: clean, goal };
 }
 
 async function mindThinks(mind) {
   const who = mind.name + (mind.epithet ? " " + mind.epithet : "");
   const sys = "You are " + who + ", " + mind.personality +
-    ".\n\nReply with ONLY your current private thought: one short sentence, first person. No preamble, no planning, no quotes.";
+    ".\nYour live state: " + stateLine(mind) +
+    ".\n\nReply with ONLY your current private thought: one short sentence, first person, colored by your state. No preamble, no planning, no quotes.";
   const raw = await bmChat([{ role: "system", content: sys },
     { role: "user", content: "Your private thought?" }], 80);
   const clean = cleanReply(raw, mind);
@@ -207,7 +309,9 @@ async function mindThinks(mind) {
 async function mindReplies(mind, history) {
   const sys = "You are " + mind.name + (mind.epithet ? " " + mind.epithet : "") +
     ", " + mind.personality +
-    " — one mind in a shared living world, chatting one-on-one with the world's keeper (Jeremy). Stay in character, be vivid but concise (a few sentences max). Never mention you are AI.";
+    " — one mind in a shared living world, chatting one-on-one with the world's keeper (Jeremy). " +
+    "Your live state: " + stateLine(mind) +
+    " Stay in character, be vivid but concise (a few sentences max). Never mention you are AI.";
   const msgs = [{ role: "system", content: sys }]
     .concat(history.slice(-14).map(h => ({ role: h.role, content: h.content })));
   return bmChat(msgs, 220);
@@ -302,6 +406,19 @@ function openSheet(id) {
     "<span>" + esc(m.name) + (m.epithet ? ' <span class="note">' + esc(m.epithet) + "</span>" : "") + "</span>";
   $("sheet-personality").textContent = m.personality + (m.awake ? "" : " (asleep)");
   $("sheet-toggle").textContent = m.awake ? "Sleep" : "Wake";
+  const d = m.drives || {};
+  $("sheet-rpg").innerHTML =
+    '<div class="astats">' +
+      '<div class="astat"><span>Level</span><b>' + levelOf(m) + "</b></div>" +
+      '<div class="astat"><span>Energy</span>' + energyBar(m.energy) + "<b>" + Math.round(m.energy == null ? 80 : m.energy) + "</b></div>" +
+      '<div class="astat"><span>Mood</span><b class="mood">' + esc(moodWord(m)) + "</b></div>" +
+      '<div class="astat"><span>XP</span><b>' + (m.xp || 0) + "</b></div>" +
+    "</div>" +
+    '<div class="drives compact">' +
+      driveBar("Foc", d.focus) + driveBar("Soc", d.social) +
+      driveBar("Cou", d.courage) + driveBar("Cre", d.creativity) +
+    "</div>" +
+    '<div class="goal-line"><span class="glabel">GOAL</span> ' + esc(m.goal || "Find a purpose in the world.") + "</div>";
   const thoughtEl = $("sheet-thought");
   const fresh = m.thought && (Date.now() - m.thoughtAt < THOUGHT_TTL_MS);
   if (!hasKey()) {
@@ -331,25 +448,64 @@ function thoughtError(err) {
   return "Couldn't reach the mind: " + String(err && err.message || err).slice(0, 120);
 }
 
-/* ---------- agents list ---------- */
+/* ---------- agents list (RPG cards) ---------- */
+function driveBar(label, val) {
+  const v = Math.max(0, Math.min(100, Math.round(val)));
+  return '<div class="drive-row"><span>' + esc(label) + '</span>' +
+    '<div class="bar"><div class="fill" style="width:' + v + '%"></div></div>' +
+    '<b>' + v + '</b></div>';
+}
+function energyBar(val) {
+  const v = Math.max(0, Math.min(100, Math.round(val == null ? 80 : val)));
+  const cls = v > 60 ? "" : v >= 30 ? " mid" : " low";
+  return '<div class="bar energy"><div class="fill' + cls + '" style="width:' + v + '%"></div></div>';
+}
 function renderAgents() {
   const list = $("agents-list");
   list.innerHTML = "";
   state.minds.forEach(m => {
+    const d = m.drives || {};
     const div = document.createElement("div");
-    div.className = "card agent-row";
+    div.className = "card agent-card";
     div.innerHTML =
-      '<span class="orb" style="border-color:' + esc(m.color) + '">' + esc(m.icon) + "</span>" +
-      '<div class="ainfo"><div class="aname">' + esc(m.name) +
-      (m.epithet ? ' <span class="note">' + esc(m.epithet) + "</span>" : "") + "</div>" +
-      '<div class="apers">' + esc(m.personality) + "</div></div>" +
-      '<label class="switch"><input type="checkbox"' + (m.awake ? " checked" : "") + '><span class="slider"></span></label>' +
-      '<button class="del" title="Delete">✕</button>';
+      '<div class="ahead">' +
+        '<span class="orb" style="border-color:' + esc(m.color) + '">' + esc(m.icon) + "</span>" +
+        '<div class="ainfo"><div class="aname">' + esc(m.name) +
+        (m.epithet ? ' <span class="note">' + esc(m.epithet) + "</span>" : "") + "</div>" +
+        '<div class="aclass">' + esc(classOf(m)) + (m.persona ? " · " + esc(m.persona) : "") +
+        ' · <span class="lvl">Lv ' + levelOf(m) + "</span></div></div>" +
+        '<label class="switch"><input type="checkbox"' + (m.awake ? " checked" : "") + '><span class="slider"></span></label>' +
+      "</div>" +
+      '<div class="astats">' +
+        '<div class="astat"><span>Energy</span>' + energyBar(m.energy) + "<b>" + Math.round(m.energy == null ? 80 : m.energy) + "</b></div>" +
+        '<div class="astat"><span>Mood</span><b class="mood">' + esc(moodWord(m)) + "</b></div>" +
+        '<div class="astat"><span>XP</span><b>' + (m.xp || 0) + "</b></div>" +
+      "</div>" +
+      '<div class="drives">' +
+        driveBar("Focus", d.focus) + driveBar("Social", d.social) +
+        driveBar("Courage", d.courage) + driveBar("Creativity", d.creativity) +
+      "</div>" +
+      '<div class="goal-line"><span class="glabel">GOAL</span> ' + esc(m.goal || "Find a purpose in the world.") + "</div>" +
+      '<div class="row card-btns">' +
+        '<button class="btn sm act-rename">Rename</button>' +
+        '<button class="btn sm danger act-retire">Retire</button>' +
+      "</div>";
     div.querySelector("input").addEventListener("change", ev => {
-      m.awake = ev.target.checked; save(); renderAll();
+      m.awake = ev.target.checked;
+      if (m.awake) m.energy = Math.max(m.energy == null ? 0 : m.energy, 40);
+      save(); renderAll();
     });
-    div.querySelector(".del").addEventListener("click", () => {
-      if (!confirm("Remove " + m.name + " from the world?")) return;
+    div.querySelector(".act-rename").addEventListener("click", () => {
+      const name = prompt("Rename " + m.name + ":", m.name);
+      if (name && name.trim()) {
+        m.name = name.trim().slice(0, 24);
+        addEvent(m, "The world learns a new name: " + m.name + ".");
+        save(); renderAll();
+      }
+    });
+    div.querySelector(".act-retire").addEventListener("click", () => {
+      if (!confirm("Retire " + m.name + " from the world? This cannot be undone.")) return;
+      addEvent(m, m.name + " retired from the world" + (m.epithet ? ", " + m.epithet + "," : "") + " and walked beyond the map's edge.");
       state.minds = state.minds.filter(x => x.id !== m.id);
       delete state.chats[m.id];
       if (state.selectedMindId === m.id) state.selectedMindId = null;
@@ -363,20 +519,38 @@ function renderAgents() {
 /* ---------- create ---------- */
 function openCreate() { $("create-modal").classList.remove("hidden"); }
 function closeCreate() { $("create-modal").classList.add("hidden"); }
+function randomizeCreate() {
+  const classes = Object.keys(CLASSES);
+  const personas = Object.keys(PERSONALITIES);
+  $("new-class").value = classes[Math.floor(Math.random() * classes.length)];
+  $("new-persona").value = personas[Math.floor(Math.random() * personas.length)];
+  $("new-backstory").value = BACKSTORY_SNIPPETS[Math.floor(Math.random() * BACKSTORY_SNIPPETS.length)];
+  const hues = ["#34d399", "#f472b6", "#a78bfa", "#8b5cf6", "#22d3ee", "#fbbf24", "#f87171", "#60a5fa"];
+  $("new-color").value = hues[Math.floor(Math.random() * hues.length)];
+  const icons = ["✦", "✧", "❖", "◉", "◎", "⛨", "⛉", "⚒", "☾", "❂"];
+  $("new-icon").value = icons[Math.floor(Math.random() * icons.length)];
+}
 function doCreate() {
   const name = $("new-name").value.trim().slice(0, 24) || "Nova";
-  const personality = $("new-personality").value.trim().slice(0, 140) || "A newcomer, still deciding who to be.";
+  const cls = CLASSES[$("new-class").value] ? $("new-class").value : "Scholar";
+  const persona = PERSONALITIES[$("new-persona").value] ? $("new-persona").value : "The Curious";
+  const backstory = $("new-backstory").value.trim().slice(0, 280);
   const color = $("new-color").value || "#8b5cf6";
   const icon = ($("new-icon").value.trim() || "✦").slice(0, 2);
-  const m = {
+  const personality = PERSONALITIES[persona] + " " + CLASSES[cls].flavor +
+    (backstory ? " " + backstory : "");
+  const goals = GOAL_IDEAS[cls];
+  const m = Object.assign({
     id: uid("m"), name, epithet: "", personality, color, icon,
     x: 15 + Math.random() * 70, y: 15 + Math.random() * 70,
-    awake: true, userCreated: true, thought: "", thoughtAt: 0
-  };
+    awake: true, userCreated: true, thought: "", thoughtAt: 0,
+    class: cls, persona, backstory,
+    goal: goals[Math.floor(Math.random() * goals.length)]
+  }, rpgStats(cls, true));
   state.minds.push(m);
-  addEvent(m, m.name + " arrived in the world.");
+  addEvent(m, m.name + " arrived in the world — a " + cls + ", " + persona.toLowerCase() + ".");
   closeCreate();
-  $("new-name").value = ""; $("new-personality").value = "";
+  $("new-name").value = ""; $("new-backstory").value = "";
   renderAll();
 }
 
@@ -472,13 +646,42 @@ async function tick(manual) {
   const picked = awake.slice().sort(() => Math.random() - 0.5).slice(0, n);
   for (const m of picked) {
     try {
-      const text = await mindActs(m);
-      addEvent(m, text);
+      // Acting costs energy. Spent minds collapse instead of calling the model.
+      const cost = 8 + Math.floor(Math.random() * 8);
+      m.energy = Math.max(0, (m.energy == null ? 80 : m.energy) - cost);
+      if (m.energy <= 0) {
+        m.awake = false;
+        addEvent(m, m.name + " collapsed into sleep, spent.");
+        save(); renderStats(); renderMap(); renderAgents();
+        continue;
+      }
+      const act = await mindActs(m);
+      if (act.goal && act.goal !== m.goal) {
+        m.goal = act.goal;
+        addEvent(m, m.name + " has taken up a new goal: " + act.goal);
+      }
+      addEvent(m, act.text);
+      // Experience and growth.
+      const oldLevel = levelOf(m);
+      m.xp = (m.xp || 0) + 10 + Math.floor(Math.random() * 16);
+      const newLevel = levelOf(m);
+      if (newLevel > oldLevel) {
+        m.mood = "triumphant"; m.moodAt = Date.now();
+        const title = m.epithet ? m.name + " " + m.epithet : m.name;
+        addEvent(m, title + " reached level " + newLevel + ".");
+      }
+      // Drives drift back toward the class baseline.
+      if (!m.drives || typeof m.drives !== "object") m.drives = {};
+      DRIVE_KEYS.forEach(d => {
+        const cur = typeof m.drives[d] === "number" ? m.drives[d] : driveBase(m, d);
+        const diff = driveBase(m, d) - cur;
+        m.drives[d] = Math.max(0, Math.min(100, cur + Math.max(-3, Math.min(3, diff))));
+      });
       if (Math.random() < 0.25) {
         m.x = Math.min(92, Math.max(8, m.x + (Math.random() - 0.5) * 24));
         m.y = Math.min(92, Math.max(8, m.y + (Math.random() - 0.5) * 24));
-        save(); renderMap();
       }
+      save(); renderStats(); renderMap(); renderAgents();
     } catch (err) {
       // Failures stay out of the world's story: the feed is for what happened,
       // not what misfired. Auto-ticks just try again next round; manual ticks
@@ -535,13 +738,18 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".tab").forEach(t =>
     t.addEventListener("click", () => switchTab(t.dataset.tab)));
   $("btn-create").addEventListener("click", openCreate);
+  $("btn-randomize").addEventListener("click", randomizeCreate);
   $("btn-do-create").addEventListener("click", doCreate);
   $("btn-cancel-create").addEventListener("click", closeCreate);
   $("sheet-backdrop").addEventListener("click", closeSheet);
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-toggle").addEventListener("click", () => {
     const m = mindById(state.selectedMindId);
-    if (m) { m.awake = !m.awake; save(); closeSheet(); renderAll(); }
+    if (m) {
+      m.awake = !m.awake;
+      if (m.awake) m.energy = Math.max(m.energy == null ? 0 : m.energy, 40);
+      save(); closeSheet(); renderAll();
+    }
   });
   $("sheet-chat").addEventListener("click", () => {
     const id = state.selectedMindId;

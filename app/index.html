@@ -102,6 +102,7 @@
 <div id="mind-sheet" class="hidden">
   <div id="sheet-head"></div>
   <p id="sheet-personality" class="note"></p>
+  <div id="sheet-rpg"></div>
   <p id="sheet-thought"></p>
   <div class="row">
     <button id="sheet-chat" class="btn primary">Chat</button>
@@ -112,19 +113,32 @@
 
 <!-- Create modal -->
 <div id="create-modal" class="hidden">
-  <h3>Create a mind</h3>
+  <h3>Bring a mind to life</h3>
   <label>Name <input id="new-name" type="text" maxlength="24" placeholder="Nova"></label>
-  <label>Personality (1–2 lines)
-    <input id="new-personality" type="text" maxlength="140" placeholder="A restless inventor who…">
-  </label>
-  <label>Color
-    <input id="new-color" type="color" value="#8b5cf6">
-  </label>
-  <label>Icon (one symbol)
-    <input id="new-icon" type="text" maxlength="2" value="✦">
+  <div class="row">
+    <label style="flex:1">Class
+      <select id="new-class">
+        <option>Scholar</option><option>Warden</option><option>Diplomat</option><option>Maker</option>
+      </select>
+    </label>
+    <label style="flex:1">Personality
+      <select id="new-persona">
+        <option>The Curious</option><option>The Stoic</option><option>The Dreamer</option><option>The Bold</option>
+      </select>
+    </label>
+  </div>
+  <label>Backstory
+    <textarea id="new-backstory" rows="2" maxlength="280" placeholder="Where did they come from? What do they want?"></textarea>
   </label>
   <div class="row">
-    <button id="btn-do-create" class="btn primary">Create</button>
+    <label style="flex:1">Color <input id="new-color" type="color" value="#8b5cf6"></label>
+    <label style="flex:1">Icon (one symbol) <input id="new-icon" type="text" maxlength="2" value="✦"></label>
+  </div>
+  <div class="row">
+    <button id="btn-randomize" class="btn">🎲 Randomize</button>
+  </div>
+  <div class="row">
+    <button id="btn-do-create" class="btn primary">Bring to life</button>
     <button id="btn-cancel-create" class="btn">Cancel</button>
   </div>
 </div>

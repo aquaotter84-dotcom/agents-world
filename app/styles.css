@@ -186,3 +186,46 @@ input[type="color"] { margin-top: 4px; width: 60px; height: 36px; border: none; 
   opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s; z-index: 99;
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---------- RPG layer ---------- */
+.bar {
+  flex: 1; height: 8px; border-radius: 999px; background: #2a2a35;
+  overflow: hidden; min-width: 40px;
+}
+.bar .fill { height: 100%; border-radius: 999px; background: var(--accent2); transition: width 0.4s; }
+.bar.energy .fill { background: var(--green); }
+.bar.energy .fill.mid { background: #fbbf24; }
+.bar.energy .fill.low { background: var(--danger); }
+.drive-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 12px; }
+.drive-row span { flex: 0 0 62px; color: var(--muted); }
+.drive-row b { flex: 0 0 26px; text-align: right; font-size: 11px; color: var(--muted); }
+.drives { margin: 8px 0; }
+.drives.compact .drive-row span { flex-basis: 30px; }
+.agent-card .ahead { display: flex; align-items: center; gap: 10px; }
+.agent-card .ainfo { flex: 1; min-width: 0; }
+.agent-card .aname { font-weight: 700; font-size: 16px; }
+.agent-card .aclass { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.agent-card .lvl { color: var(--accent2); font-weight: 700; }
+.astats { display: flex; gap: 10px; margin: 8px 0 2px; align-items: center; }
+.astat { display: flex; align-items: center; gap: 6px; font-size: 12px; flex: 1; min-width: 0; }
+.astat > span { color: var(--muted); flex: 0 0 auto; }
+.astat b { font-size: 13px; }
+.astat .mood { color: var(--accent2); text-transform: capitalize; }
+.goal-line { font-size: 13px; margin: 6px 0; line-height: 1.4; }
+.goal-line .glabel {
+  font-size: 10px; font-weight: 800; letter-spacing: 1px; color: var(--accent2);
+  border: 1px solid #3a2f5c; border-radius: 6px; padding: 2px 6px; margin-right: 6px;
+  white-space: nowrap;
+}
+.card-btns { margin-top: 8px; }
+.btn.sm { flex: 0 1 auto; padding: 8px 14px; font-size: 13px; }
+#sheet-rpg { margin: 10px 0; padding: 10px 12px; background: rgba(0,0,0,0.25); border-radius: 12px; }
+#sheet-rpg .astats { margin: 0 0 4px; flex-wrap: wrap; }
+#sheet-rpg .drives { margin: 6px 0 2px; }
+#sheet-rpg .goal-line { margin: 6px 0 0; }
+select, textarea {
+  width: 100%; margin-top: 4px; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid #2a2a35; background: #101016; color: var(--text); font-size: 15px;
+  font-family: inherit;
+}
+textarea { resize: vertical; min-height: 56px; }
