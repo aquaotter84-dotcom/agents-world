@@ -1,0 +1,5 @@
+# Agents World
+node_modules/
+deploy/android/
+.DS_Store
+*.log
