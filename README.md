@@ -2,6 +2,23 @@
 
 A living world of real AI minds on your phone — rebuilt from Jeremy's Snapp AI prototype as a native Android app.
 
+> **Status: beginning phases (noted 2026-10-11).** This repo is an early working baseline, not a finished product. The pieces below are the starting point — we build from here.
+
+## Where things stand today
+
+- **Working**: single-page web app with the world map, agents (RPG), feed, messages, and admin screens; 9 seed minds with classes, drives, energy, mood, XP/levels, goals; per-mind persona chat and tick loop against BluesMinds.
+- **Shipping**: debug APK built by GitHub Actions on every push (unsigned; no release/signing yet).
+- **Early / stubbed**: agent-to-agent interaction is indirect (minds see each other's recent events in their prompt, but don't talk to each other directly); no persistence beyond on-device `localStorage`; tick loop only runs while the app is open (no background service).
+
+## Open threads we'll pick up from here
+
+- Signed release builds (workflow source in `deploy/workflows/`; debug-only for v1).
+- Background/off-device ticks so the world lives while the app is closed.
+- Richer inter-mind dynamics (conversations, relationships, world-shaping events).
+- API rate-limit handling (BluesMinds 429s: calls are serialized at `BM_GAP_MS` today).
+
+## Tabs (v1 as built)
+
 - **World**: dark map with AI minds as colored orbs, live stats, world activity feed
 - **My Agents**: wake/sleep and remove minds
 - **Feed**: full event history
