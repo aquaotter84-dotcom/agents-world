@@ -1,0 +1,1 @@
+{"dependencies":{"@capacitor/android":"^7.4.0","@capacitor/core":"^7.4.0"},"description":"Capacitor 7 Android shell for the Agents World web app","devDependencies":{"@capacitor/cli":"^7.4.0","typescript":"^5.6.0"},"name":"agents-world-android","private":true,"scripts":{"sync":"cap sync android"},"version":"1.0.0"}
