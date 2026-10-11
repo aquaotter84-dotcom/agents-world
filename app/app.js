@@ -156,23 +156,52 @@ function worldContext(excludeId) {
   return { others, recent };
 }
 
+/**
+ * Reasoning models sometimes leak their planning ("We need to respond as...")
+ * or cross-talk about another mind. This strips the scaffolding and keeps only
+ * the event. Returns null when nothing salvageable remains — the caller then
+ * skips silently instead of posting a misfire to the world's story.
+ */
+function cleanReply(text, mind) {
+  let t = String(text || "").trim().replace(/^["“”']+|["“”']+$/g, "").trim();
+  if (!t) return null;
+  const quoted = t.match(/["“]([^"”]{12,220})["”]/);
+  if (quoted) t = quoted[1].trim();
+  const meta = /\bwe (need|must|should|will|shall)\b|provide (one|a) (short|vivid) sentence|example:|in third person|never break character|narrat\w* (your|my) reasoning|\bas an ai\b/i;
+  const sents = t.split(/(?<=[.!?])\s+/).filter(s => s.trim());
+  const kept = sents.filter(s => !meta.test(s));
+  t = (kept.length ? kept : sents).join(" ").trim();
+  if (meta.test(t)) return null; // still reads as planning — drop it
+  // Cross-talk guard: acting mind should be the subject, not another mind's brief
+  const other = state.minds.find(m => m.id !== mind.id && new RegExp("\\b" + m.name + "\\b", "i").test(t));
+  const self = new RegExp("\\b" + mind.name + "\\b", "i").test(t);
+  if (other && !self) return null;
+  return t || null;
+}
+
 async function mindActs(mind) {
   const ctx = worldContext(mind.id);
-  const sys = "You are " + mind.name + (mind.epithet ? " " + mind.epithet : "") +
-    ", " + mind.personality +
+  const who = mind.name + (mind.epithet ? " " + mind.epithet : "");
+  const sys = "You are " + who + ", " + mind.personality +
     " — one mind among many in a shared living world. Other minds: " + (ctx.others.join(", ") || "none yet") +
     ". Recent events: " + (ctx.recent.join(" | ") || "the world is newly awake") +
-    ". In one short vivid sentence, say what you do, decide, or declare now (a world event, third person, e.g. \"Juno broke with the district council over the north wall.\"). Never break character, never mention you are AI, never narrate your reasoning.";
-  return bmChat([{ role: "system", content: sys },
-    { role: "user", content: "What happens now?" }], 90);
+    ".\n\nReply with ONLY one short vivid sentence in third person describing what YOU (" + mind.name + ") do, decide, or declare right now. No preamble, no explanation, no planning, no quotes. Stay in character.";
+  const raw = await bmChat([{ role: "system", content: sys },
+    { role: "user", content: "What does " + mind.name + " do now?" }], 90);
+  const clean = cleanReply(raw, mind);
+  if (!clean) throw new Error("misfire");
+  return clean;
 }
 
 async function mindThinks(mind) {
-  const sys = "You are " + mind.name + (mind.epithet ? " " + mind.epithet : "") +
-    ", " + mind.personality +
-    ". Share your current private thought in one short sentence, first person. Never mention you are AI.";
-  return bmChat([{ role: "system", content: sys },
-    { role: "user", content: "What are you thinking right now?" }], 80);
+  const who = mind.name + (mind.epithet ? " " + mind.epithet : "");
+  const sys = "You are " + who + ", " + mind.personality +
+    ".\n\nReply with ONLY your current private thought: one short sentence, first person. No preamble, no planning, no quotes.";
+  const raw = await bmChat([{ role: "system", content: sys },
+    { role: "user", content: "Your private thought?" }], 80);
+  const clean = cleanReply(raw, mind);
+  if (!clean) throw new Error("misfire");
+  return clean;
 }
 
 async function mindReplies(mind, history) {
