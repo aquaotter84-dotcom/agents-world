@@ -69,12 +69,50 @@ function load() {
 }
 
 const $ = id => document.getElementById(id);
+let toastTimer = null;
+function toast(msg) {
+  let el = $("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
+}
 const mindById = id => state.minds.find(m => m.id === id);
 const awakeMinds = () => state.minds.filter(m => m.awake);
 const hasKey = () => !!(state.settings.apiKey && state.settings.apiKey.trim());
 
 /* ---------- BluesMinds ---------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// One model call at a time, spaced out: gpt-oss-20b via BluesMinds rate-limits
+// hard on bursts (seen 2026-10-11: simultaneous ticks → HTTP 429). Every mind,
+// thought, and chat funnels through this queue.
+let bmQueue = Promise.resolve();
+let bmNextAt = 0;
+let bmBackoffUntil = 0;
+const BM_GAP_MS = 4000;
+
 async function bmChat(messages, maxTokens) {
+  const task = bmQueue.then(async () => {
+    const now = Date.now();
+    if (now < bmBackoffUntil) await sleep(bmBackoffUntil - now);
+    const gap = bmNextAt - Date.now();
+    if (gap > 0) await sleep(gap);
+    try {
+      return await bmChatOnce(messages, maxTokens);
+    } finally {
+      bmNextAt = Date.now() + BM_GAP_MS;
+    }
+  });
+  bmQueue = task.catch(() => {}); // a failed call must not break the chain
+  return task;
+}
+
+async function bmChatOnce(messages, maxTokens) {
   const key = state.settings.apiKey.trim();
   if (!key) throw new Error("no-key");
   const ctrl = new AbortController();
@@ -91,14 +129,20 @@ async function bmChat(messages, maxTokens) {
       }),
       signal: ctrl.signal
     });
+    if (res.status === 429) {
+      const ra = parseInt(res.headers.get("retry-after") || "0", 10);
+      bmBackoffUntil = Date.now() + Math.max(isNaN(ra) ? 0 : ra * 1000, 30000);
+      throw new Error("rate-limited — resting a bit");
+    }
     if (!res.ok) {
       let detail = "";
       try { detail = (await res.text()).slice(0, 160); } catch (e) {}
       throw new Error("HTTP " + res.status + (detail ? " — " + detail : ""));
     }
     const body = await res.json();
-    const text = body && body.choices && body.choices[0] && body.choices[0].message
-      ? String(body.choices[0].message.content || "").trim() : "";
+    const msg = body && body.choices && body.choices[0] && body.choices[0].message;
+    // gpt-oss sometimes puts the text in reasoning_content with content empty
+    const text = msg ? String(msg.content || msg.reasoning_content || "").trim() : "";
     if (!text) throw new Error("empty reply");
     return text;
   } finally {
@@ -407,7 +451,10 @@ async function tick(manual) {
         save(); renderMap();
       }
     } catch (err) {
-      addEvent(m, "The world flickered for " + m.name + " (" + String(err.message || err).slice(0, 100) + ").", true);
+      // Failures stay out of the world's story: the feed is for what happened,
+      // not what misfired. Auto-ticks just try again next round; manual ticks
+      // get one quiet note.
+      if (manual) toast(m.name + ": " + String(err.message || err).slice(0, 90));
     }
   }
   } finally {
