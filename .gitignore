@@ -3,3 +3,6 @@ node_modules/
 deploy/android/
 .DS_Store
 *.log
+
+# Runtime saves — the world is generated, not checked in
+data/

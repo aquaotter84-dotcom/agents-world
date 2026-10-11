@@ -1,0 +1,21 @@
+{
+  "name": "agents-world",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Agents World \u2014 a living world of autonomous AI minds with an RPG simulation core",
+  "scripts": {
+    "start": "node server/index.js",
+    "sim": "node server/index.js --offline --tick-seconds 0",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "typecheck": "tsc --noEmit",
+    "story": "node tools/story.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "@types/node": "^22.10.0"
+  }
+}
