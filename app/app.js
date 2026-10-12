@@ -335,12 +335,13 @@ async function bmChatOnce(messages, maxTokens) {
 function cleanReply(text, agent) {
   let t = String(text || "").trim().replace(/^["“”']+|["“”']+$/g, "").trim();
   if (!t) return null;
-  const quoted = t.match(/["“]([^"”]{12,220})["”]/);
-  if (quoted) t = quoted[1].trim();
-  const meta = /\bwe (need|must|should|will|shall)\b|provide (one|a) (short|vivid) sentence|example:|in third person|never break character|narrat\w* (your|my) reasoning|\bas an ai\b/i;
+  const meta = /\bwe (need|must|should|will|shall|have to|are to)\b|provide (one|a) (short|vivid) sentence|example:|in third person|never break character|stay in character|narrat\w* (your|my) reasoning|\bas an ai\b|the user (says|might|wants)|this is a prompt|no mention.{0,30}\bai\b|comply with policy|disallowed content|it'?s (safe|permissible)/i;
   const sents = t.split(/(?<=[.!?])\s+/).filter(s => s.trim());
   const kept = sents.filter(s => !meta.test(s));
+  if (kept.length * 2 < sents.length) return null; // mostly planning — misfire
   t = (kept.length ? kept : sents).join(" ").trim();
+  const quoted = t.match(/["“]([^"”]{12,220})["”]/);
+  if (quoted) t = quoted[1].trim();
   if (meta.test(t)) return null;
   const other = livingAgents(world).find(m => m.id !== agent.id && new RegExp("\\b" + m.name + "\\b", "i").test(t));
   const self = new RegExp("\\b" + agent.name + "\\b", "i").test(t);
@@ -449,10 +450,17 @@ async function mindReplies(a, history, roleId) {
     role.voice + " " +
     "Live state: " + stateLine(a, tickNow()) +
     ".\nWhere you are: " + regionName(world, a.regionId) + ". What you are working on: " + a.goal.text +
-    ".\nStay in character, be vivid but concise (a few sentences max). Never mention you are AI.";
+    ".\nStay in character, be vivid but concise (a few sentences max). Never mention you are AI. Never narrate your reasoning or describe what you are about to say — output only the reply itself.";
   const msgs = [{ role: "system", content: sys }]
     .concat(history.slice(-14).map(h => ({ role: h.role, content: h.content })));
-  return bmChat(msgs, 220);
+  let clean = cleanReply(await bmChat(msgs, 220), a);
+  if (!clean) {
+    // One retry with a firmer nudge before giving up on this reply.
+    const retry = msgs.concat([{ role: "user", content: "Reply now, in character — no planning, no preamble, only the reply itself." }]);
+    clean = cleanReply(await bmChat(retry, 220), a);
+  }
+  if (!clean) throw new Error("misfire");
+  return clean;
 }
 
 function armTick() {
@@ -1510,7 +1518,8 @@ async function sendChat() {
     hist.push({ role: "assistant", content: reply, ts: Date.now() });
     if (hist.length > 100) hist.splice(0, hist.length - 100);
   } catch (err) {
-    hist.push({ role: "assistant", content: "(couldn't reach " + a.name + ": " + String(err.message || err).slice(0, 120) + ")", ts: Date.now() });
+    const misfire = String(err && err.message) === "misfire";
+    hist.push({ role: "assistant", content: misfire ? "(" + a.name + "'s thoughts scatter — say that again.)" : "(couldn't reach " + a.name + ": " + String(err.message || err).slice(0, 120) + ")", ts: Date.now() });
   }
   save(); renderChatLog();
 }
