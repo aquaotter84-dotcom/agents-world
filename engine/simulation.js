@@ -715,7 +715,11 @@ function resolveGoalApproachMoment(world, moment, agent, answer, engineFallback)
   const accepted = proposal.ok && agent.awake && !agent.retired;
   const reason = !agent.awake || agent.retired
     ? (agent.retired ? "The mind left before it could act." : "The mind fell asleep before it could act.")
-    : proposal.reason;
+    : engineFallback
+      // An expiry is not a grammar rejection. The record must say what
+      // actually happened, or a slow model looks like a wrong model.
+      ? "No answer arrived in time; the engine made the call."
+      : proposal.reason;
 
   agent.proposal.count += 1;
   agent.proposal.nextTick = world.clock.tick + cfg.intervalTicks;
