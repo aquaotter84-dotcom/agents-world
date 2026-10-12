@@ -50,12 +50,13 @@
       <div id="agents-list"></div>
     </section>
 
-    <!-- RECORD: feed / chronicle / secrets -->
+    <!-- RECORD: feed / chronicle / secrets / followable threads -->
     <section id="screen-record" class="screen">
       <div id="record-tabs">
         <button class="rtab active" data-view="feed">Feed</button>
         <button class="rtab" data-view="chronicle">Chronicle</button>
         <button class="rtab" data-view="secrets">Secrets</button>
+        <button class="rtab" data-view="threads">Threads</button>
         <button class="rtab" data-view="keeper">Keeper</button>
       </div>
       <div id="record-pane"></div>
@@ -104,6 +105,17 @@
       </div>
 
       <div class="card form">
+        <p class="eyebrow">World save insurance</p>
+        <p class="note">Download the complete simulated world — minds, memories, relationships, secrets, project progress, and replay state — or restore it later from a backup JSON file. Import replaces the current local world; API keys, chats, and keeper progress are not included. Stop the background service before restoring its world.</p>
+        <div class="row">
+          <button id="btn-export-world" class="btn">Download backup</button>
+          <button id="btn-import-world" class="btn">Restore backup</button>
+          <input id="import-world-file" class="hidden" type="file" accept=".json,application/json">
+        </div>
+        <p id="backup-status" class="note" aria-live="polite"></p>
+      </div>
+
+      <div class="card form">
         <p class="eyebrow">The record</p>
         <div class="row">
           <button id="btn-tick" class="btn">One tick</button>
@@ -140,6 +152,7 @@
   <div id="sheet-ties"></div>
   <div id="sheet-carrying"></div>
   <div id="sheet-cognition"></div>
+  <button id="sheet-follow-mind" class="btn ghost thread-link">Follow this mind’s thread →</button>
   <div id="sheet-thought-wrap">
     <p class="eyebrow">Right now, privately</p>
     <p id="sheet-thought"></p>

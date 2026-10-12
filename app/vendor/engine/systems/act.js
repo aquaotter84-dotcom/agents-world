@@ -430,8 +430,8 @@ function shareSecret(world, agent, target, secret, cfg) {
     { op: "secret_share", secretId: secret.id, from: agent.id, to: target.id, fidelity,
       memoryText: `${agent.name} told me something about someone. It did not sound certain, but it was interesting.`,
       memoryValence: -0.1, memorySalience: 0.6 },
-    { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 5, familiarity: 8, trust: 2 }, reason: "sharing a secret" },
-    { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: 2 }, reason: "being trusted with a secret" },
+    { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 5, familiarity: 8, trust: 2 }, reason: "sharing a secret", secretId: secret.id },
+    { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: 2 }, reason: "being trusted with a secret", secretId: secret.id },
     { op: "need", agent: agent.id, deltas: { connection: 12, esteem: 4, energy: -3 } },
     {
       op: "memory",

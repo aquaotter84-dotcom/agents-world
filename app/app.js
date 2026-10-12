@@ -84,7 +84,7 @@ let world = null;
 let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45 };
 let chats = {};
 let chatRoles = {};
-let ui = { selectedId: null, chatId: null, record: "feed" };
+let ui = { selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
 let lastSeenAt = Date.now();
 let keeper = emptyKeeper();
 
@@ -726,9 +726,15 @@ function renderRecord() {
         '<div class="smeta">' + (s.isPublic ? "PUBLIC" : "HELD BY " + holders.length) +
         (about ? " · about " + esc(about.name) : "") +
         " · since day " + dayOfTick(s.originTick) + "</div>" +
-        '<div class="holders">' + chips + "</div>";
+        '<div class="holders">' + chips + "</div>" +
+        '<button class="thread-mini follow-secret-thread" data-secret="' + esc(s.id) +
+        '">Follow this thread</button>';
       pane.appendChild(d);
     }
+    return;
+  }
+  if (ui.record === "threads") {
+    renderThreads(pane);
     return;
   }
   // feed
@@ -745,6 +751,250 @@ function renderRecord() {
     p.textContent = "…and " + (world.events.length - shown.length) + " older lines in the record.";
     pane.appendChild(p);
   }
+}
+
+function threadOptions(kind) {
+  const minds = livingAgents(world);
+  if (kind === "mind") return minds.map(agent => ({ value: agent.id, label: agent.icon + " " + agent.name }));
+  if (kind === "pair") {
+    const pairs = [];
+    for (let i = 0; i < minds.length; i += 1) {
+      for (let j = i + 1; j < minds.length; j += 1) {
+        pairs.push({ value: minds[i].id + "|" + minds[j].id, label: minds[i].name + " ↔ " + minds[j].name });
+      }
+    }
+    return pairs;
+  }
+  return world.secrets.map(secret => {
+    const about = secret.aboutId ? agentById(world, secret.aboutId) : null;
+    return {
+      value: secret.id,
+      label: (secret.isPublic ? "PUBLIC · " : "HELD · ") + (about ? "about " + about.name : secret.kind) +
+        " · Day " + dayOfTick(secret.originTick)
+    };
+  });
+}
+
+function renderThreads(pane) {
+  const kind = ["mind", "pair", "secret"].includes(ui.threadKind) ? ui.threadKind : "mind";
+  const options = threadOptions(kind);
+  if (!options.some(option => option.value === ui.threadTarget)) {
+    ui.threadTarget = options[0] ? options[0].value : "";
+  }
+  const kindOptions = ["mind", "pair", "secret"].map(value =>
+    '<option value="' + value + '"' + (value === kind ? " selected" : "") + ">" +
+    (value === "mind" ? "Mind" : value === "pair" ? "Pair" : "Secret") + "</option>").join("");
+  const targetOptions = options.map(option =>
+    '<option value="' + esc(option.value) + '"' + (option.value === ui.threadTarget ? " selected" : "") + ">" +
+    esc(option.label) + "</option>").join("");
+  pane.innerHTML = '<div class="thread-controls card">' +
+    '<label>Thread type<select id="thread-kind">' + kindOptions + "</select></label>" +
+    '<label>Follow<select id="thread-target">' + targetOptions + "</select></label>" +
+    '<p class="note">Start with the incident, then follow what was learned, how ties shifted, and what happened next.</p>' +
+    '</div><div id="thread-detail"></div>';
+  $("thread-kind").addEventListener("change", ev => {
+    ui.threadKind = ev.target.value;
+    ui.threadTarget = null;
+    save();
+    renderRecord();
+  });
+  $("thread-target").addEventListener("change", ev => {
+    ui.threadTarget = ev.target.value;
+    save();
+    renderRecord();
+  });
+  renderThreadDetail($("thread-detail"), kind, ui.threadTarget);
+}
+
+function eventsForThread(kind, target) {
+  if (kind === "secret") return world.events.filter(event => event.secretId === target);
+  if (kind === "mind") return world.events.filter(event => event.agentId === target || event.subjectId === target);
+  const [firstId, secondId] = String(target || "").split("|");
+  return world.events.filter(event => {
+    const direct = (event.agentId === firstId && event.subjectId === secondId) ||
+      (event.agentId === secondId && event.subjectId === firstId);
+    const scene = event.scene && event.scene.some(line => line.speakerId === firstId) &&
+      event.scene.some(line => line.speakerId === secondId);
+    return direct || scene;
+  });
+}
+
+function memoriesForThread(kind, target) {
+  if (kind === "secret") {
+    return world.agents.flatMap(agent => agent.memory.traces
+      .filter(trace => trace.secretId === target)
+      .map(trace => ({ agent, trace })));
+  }
+  if (kind === "mind") {
+    const agent = agentById(world, target);
+    return agent ? agent.memory.traces.map(trace => ({ agent, trace })) : [];
+  }
+  const [firstId, secondId] = String(target || "").split("|");
+  return world.agents.flatMap(agent => agent.memory.traces
+    .filter(trace => (agent.id === firstId && trace.subjectId === secondId) ||
+      (agent.id === secondId && trace.subjectId === firstId))
+    .map(trace => ({ agent, trace })));
+}
+
+function threadSection(title, body) {
+  return '<section class="thread-section"><h3>' + esc(title) + "</h3>" + body + "</section>";
+}
+
+function threadEventCard(event) {
+  const actor = event.agentId ? agentById(world, event.agentId) : null;
+  const pairLink = event.agentId && event.subjectId
+    ? '<button class="thread-mini follow-pair-thread" data-a="' + esc(event.agentId) + '" data-b="' +
+      esc(event.subjectId) + '">Follow pair</button>'
+    : "";
+  const secretLink = event.secretId
+    ? '<button class="thread-mini follow-secret-thread" data-secret="' + esc(event.secretId) + '">Follow secret</button>'
+    : "";
+  return '<article class="card thread-event"><div class="thread-event-kind">' + esc(event.kind) +
+    '</div><p>' + esc(event.text) + '</p><div class="thread-event-meta">' +
+    (actor ? esc(actor.name) + " · " : "") + "Day " + dayOfTick(event.tick) + " · tick " + event.tick +
+    '</div><div class="thread-event-links">' + pairLink + secretLink + "</div></article>";
+}
+
+function cognitionThreadCard(moment) {
+  return '<article class="card thread-event cognition-thread-event"><div class="thread-event-kind">' +
+    (moment.engineResolved ? "ENGINE FALLBACK" : "SELF-AUTHORED PLAN") + '</div><p>' +
+    esc(moment.planText || "No plan text was returned.") + '</p><div class="thread-event-meta">Day ' +
+    dayOfTick(moment.tick) + " · " + esc(moment.planAction || moment.resolution || "no action") +
+    (moment.planValidation ? " · " + esc(moment.planValidation) : "") + "</div></article>";
+}
+
+function relationshipSummary(agent, other) {
+  const edge = agent.relations[other.id];
+  if (!edge) return '<div class="thread-relation"><b>' + esc(agent.name) + " → " + esc(other.name) +
+    '</b><span class="note">no recorded tie yet</span></div>';
+  return '<div class="thread-relation"><b>' + esc(agent.name) + " → " + esc(other.name) +
+    '</b><span>affection ' + Math.round(edge.affinity) + " · trust " + Math.round(edge.trust) +
+    " · resentment " + Math.round(edge.resentment) + " · familiarity " + Math.round(edge.familiarity) + "</span></div>";
+}
+
+function secretKnowledgeRows(secret) {
+  const holders = Object.entries(secret.holders).map(([id, fidelity]) => {
+    const agent = agentById(world, id);
+    if (!agent) return null;
+    const traces = agent.memory.traces.filter(trace => trace.secretId === secret.id).sort((a, b) => a.tick - b.tick);
+    const first = traces[0];
+    const publicReveal = traces.find(trace => /everyone knows now/i.test(trace.text));
+    const route = publicReveal ? "heard when it went public" : id === secret.originatorId ? "at the beginning" : "by retelling";
+    return { agent, fidelity, tick: first ? first.tick : secret.originTick, route };
+  }).filter(Boolean).sort((a, b) => a.tick - b.tick || a.agent.name.localeCompare(b.agent.name));
+  if (!holders.length) return '<p class="note">No current holder is recorded.</p>';
+  return '<div class="thread-knowledge-list">' + holders.map(holder =>
+    '<article class="thread-knowledge"><b>' + esc(holder.agent.name) + '</b><span class="thread-event-meta">' +
+    esc(holder.route) + " · Day " + dayOfTick(holder.tick) + " · " +
+    (holder.fidelity >= 0.85 ? "firsthand" : holder.fidelity >= 0.6 ? "partial" : "garbled") +
+    '</span><p>' + esc(secretTextFor(secret, holder.fidelity)) + "</p></article>").join("") + "</div>";
+}
+
+function renderThreadDetail(root, kind, target) {
+  if (!target) {
+    root.innerHTML = '<div class="card thread-empty">There are no living minds or secrets to follow yet.</div>';
+    return;
+  }
+  const events = eventsForThread(kind, target).slice().sort((a, b) => a.seq - b.seq);
+  const memories = memoriesForThread(kind, target).sort((a, b) => a.trace.tick - b.trace.tick);
+  let title = "", originLabel = "Initiating incident", origin = "", knowledge = "", relations = "", plans = [];
+  let agentIds = [];
+  let secret = null;
+
+  if (kind === "mind") {
+    const agent = agentById(world, target);
+    if (!agent) return;
+    title = agent.name + "’s thread";
+    agentIds = [agent.id];
+    const firstEvent = events[0];
+    const firstMemory = memories[0] && memories[0].trace;
+    origin = firstEvent
+      ? '<article class="thread-origin"><span>Earliest incident still in the record · Day ' + dayOfTick(firstEvent.tick) +
+        '</span><p>' + esc(firstEvent.text) + "</p></article>"
+      : firstMemory
+        ? '<article class="thread-origin"><span>First surviving memory · Day ' + dayOfTick(firstMemory.tick) +
+          '</span><p>' + esc(firstMemory.text) + "</p></article>"
+        : '<p class="note">No incident has been recorded yet.</p>';
+    const known = world.secrets.filter(item => item.holders[agent.id] !== undefined).sort((a, b) => b.originTick - a.originTick);
+    knowledge = known.length
+      ? '<div class="thread-knowledge-list">' + known.slice(0, 12).map(item =>
+        '<article class="thread-knowledge"><p>' + esc(secretTextFor(item, item.holders[agent.id])) +
+        '</p><button class="thread-mini follow-secret-thread" data-secret="' + esc(item.id) + '">Follow this secret</button></article>').join("") + "</div>"
+      : '<p class="note">This mind is not carrying a recorded secret.</p>';
+    const ties = Object.keys(agent.relations).map(id => agentById(world, id)).filter(other => other && !other.retired)
+      .sort((a, b) => {
+        const ea = agent.relations[a.id], eb = agent.relations[b.id];
+        return (Math.abs(eb.affinity) + eb.trust + eb.resentment + eb.familiarity) -
+          (Math.abs(ea.affinity) + ea.trust + ea.resentment + ea.familiarity);
+      }).slice(0, 6);
+    relations = ties.map(other => relationshipSummary(agent, other)).join("") ||
+      '<p class="note">No relationship changes have been recorded.</p>';
+  } else if (kind === "pair") {
+    const [firstId, secondId] = String(target).split("|");
+    const first = agentById(world, firstId), second = agentById(world, secondId);
+    if (!first || !second) return;
+    title = first.name + " and " + second.name;
+    agentIds = [first.id, second.id];
+    const firstEvent = events[0];
+    const firstMemory = memories[0] && memories[0].trace;
+    origin = firstEvent
+      ? '<article class="thread-origin"><span>First shared incident still in the record · Day ' + dayOfTick(firstEvent.tick) +
+        '</span><p>' + esc(firstEvent.text) + "</p></article>"
+      : firstMemory
+        ? '<article class="thread-origin"><span>First surviving shared memory · Day ' + dayOfTick(firstMemory.tick) +
+          '</span><p>' + esc(firstMemory.text) + "</p></article>"
+        : '<p class="note">No shared incident has been recorded yet.</p>';
+    const shared = world.secrets.filter(item => item.holders[first.id] !== undefined || item.holders[second.id] !== undefined)
+      .sort((a, b) => b.originTick - a.originTick).slice(0, 10);
+    knowledge = shared.length
+      ? '<div class="thread-knowledge-list">' + shared.map(item => {
+        const firstKnows = item.holders[first.id] !== undefined;
+        const secondKnows = item.holders[second.id] !== undefined;
+        const whoKnows = [firstKnows ? first.name : "", secondKnows ? second.name : ""].filter(Boolean).join(" and ");
+        const fidelity = firstKnows ? item.holders[first.id] : item.holders[second.id];
+        return '<article class="thread-knowledge"><p>' + esc(whoKnows + (firstKnows && secondKnows ? " both know: " : " knows: ") + secretTextFor(item, fidelity)) +
+          '</p><button class="thread-mini follow-secret-thread" data-secret="' + esc(item.id) + '">Follow this secret</button></article>';
+      }).join("") + "</div>"
+      : '<p class="note">Neither mind has a recorded shared secret.</p>';
+    relations = relationshipSummary(first, second) + relationshipSummary(second, first);
+  } else {
+    secret = world.secrets.find(item => item.id === target) || null;
+    if (!secret) return;
+    const about = secret.aboutId ? agentById(world, secret.aboutId) : null;
+    title = "Secret thread · " + (about ? "about " + about.name : secret.kind);
+    agentIds = [secret.originatorId || "", ...(about ? [about.id] : [])];
+    const firstHolder = Object.entries(secret.holders).map(([id, fidelity]) => ({ agent: agentById(world, id), fidelity }))
+      .find(holder => holder.agent);
+    origin = '<article class="thread-origin"><span>Origin · Day ' + dayOfTick(secret.originTick) +
+      (secret.originatorId ? " · began with " + esc(agentById(world, secret.originatorId)?.name || "a mind") : "") +
+      '</span><p>' + esc(firstHolder ? secretTextFor(secret, firstHolder.fidelity) : secret.text) + "</p></article>";
+    knowledge = secretKnowledgeRows(secret);
+    const relatedChanges = events.filter(event => event.kind === "relationship");
+    relations = relatedChanges.length
+      ? relatedChanges.slice().reverse().slice(0, 12).map(threadEventCard).join("")
+      : '<p class="note">No relationship change has been linked to this secret yet.</p>';
+  }
+
+  plans = world.resolved.filter(moment => moment.kind === "cognition" && agentIds.includes(moment.agentId))
+    .sort((a, b) => a.tick - b.tick);
+  const originEvent = kind === "secret" ? null : events[0];
+  const subsequent = events.filter(event => !originEvent || event.id !== originEvent.id)
+    .slice().reverse().slice(0, 40);
+  const recentMemories = memories.slice().reverse().slice(0, 16);
+  root.innerHTML = '<div class="thread-heading card"><p class="eyebrow">FOLLOWING THIS THREAD</p><h2 id="thread-title">' +
+    esc(title) + '</h2><p class="note">Starting point, knowledge trail, relationship changes, and what followed.</p></div>' +
+    threadSection(originLabel, origin) +
+    threadSection("Who learned what", knowledge) +
+    threadSection(kind === "secret" ? "Relationship changes linked to this secret" : "Relationship changes", relations) +
+    (plans.length ? threadSection("Self-authored plans in this thread", plans.slice(-8).reverse().map(cognitionThreadCard).join("")) : "") +
+    threadSection("Subsequent events", subsequent.length
+      ? subsequent.map(threadEventCard).join("")
+      : '<p class="note">No later public events are in this thread yet.</p>') +
+    threadSection("Private memories and tellings", recentMemories.length
+      ? '<div class="thread-memory-list">' + recentMemories.map(({ agent, trace }) =>
+        '<article class="thread-memory"><span>' + esc(agent.name) + " · Day " + dayOfTick(trace.tick) +
+        (trace.secretId ? " · secret memory" : " · private memory") + '</span><p>' + esc(trace.text) + "</p></article>").join("") + "</div>"
+      : '<p class="note">No private memories survive for this thread.</p>');
 }
 
 function dayOfTick(tick) {
@@ -1276,7 +1526,8 @@ function tieRows(a) {
       ", resentment " + Math.round(cold) + '">' +
       '<i class="warm" style="width:' + warm + '%"></i>' +
       '<i class="cold" style="width:' + cold + '%"></i>' +
-      "</span></div>";
+      '</span><button class="thread-mini follow-pair-thread" data-a="' + esc(a.id) +
+      '" data-b="' + esc(other.id) + '" title="Follow their shared thread">Thread</button></div>';
   }).join("");
   return '<span class="sec-tag">Ties</span>' + rows;
 }
@@ -1651,6 +1902,10 @@ const SPEEDS = [
 function loadAdmin() {
   $("set-key").value = settings.apiKey || "";
   $("set-model").value = settings.model || "openai/gpt-oss-20b";
+  $("btn-import-world").disabled = serviceMode;
+  $("backup-status").textContent = serviceMode
+    ? "The background service owns this world. Download a backup here, but stop the service before restoring one."
+    : "";
   renderSpeeds();
   renderAdminWorld();
 }
@@ -1681,6 +1936,82 @@ function saveAdmin() {
       (settings.tickSeconds || 45) + "s, or press One tick."
     : "Saved. The world keeps running on its own — no key needed.";
 }
+
+const WORLD_BACKUP_FORMAT = "agents-world-save";
+const WORLD_BACKUP_VERSION = 1;
+function downloadWorldBackup() {
+  try {
+    const snapshot = JSON.parse(serializeWorld(world));
+    const backup = JSON.stringify({
+      format: WORLD_BACKUP_FORMAT,
+      version: WORLD_BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      world: snapshot
+    }, null, 2);
+    const blob = new Blob([backup], { type: "application/json" });
+    const urlApi = window.URL;
+    const objectUrl = typeof urlApi.createObjectURL === "function";
+    const href = objectUrl
+      ? urlApi.createObjectURL(blob)
+      : "data:application/json;charset=utf-8," + encodeURIComponent(backup);
+    const link = document.createElement("a");
+    const seed = String(world.seed).replace(/[^a-z0-9_-]/gi, "_");
+    link.href = href;
+    link.download = "agents-world-seed-" + seed + "-day-" + world.clock.day + ".json";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    if (objectUrl) window.setTimeout(() => urlApi.revokeObjectURL?.(href), 1000);
+    $("backup-status").textContent = "World backup downloaded. Keep the JSON file somewhere safe.";
+  } catch (error) {
+    $("backup-status").textContent = "Could not create backup: " + String(error?.message || error);
+  }
+}
+
+async function restoreWorldBackup(file) {
+  const status = $("backup-status");
+  try {
+    const payload = JSON.parse(await file.text());
+    let snapshot = payload;
+    if (payload?.format !== undefined) {
+      if (payload.format !== WORLD_BACKUP_FORMAT || payload.version !== WORLD_BACKUP_VERSION) {
+        throw new Error("This backup format or version is not supported.");
+      }
+      snapshot = payload.world;
+    }
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+        !Array.isArray(snapshot.agents) || snapshot.agents.length === 0 ||
+        !snapshot.clock || !Number.isFinite(snapshot.clock.tick) || !Number.isFinite(snapshot.clock.day)) {
+      throw new Error("The file does not contain a valid world snapshot.");
+    }
+    const restored = deserializeWorld(snapshot);
+    if (!Array.isArray(restored.events) || !Array.isArray(restored.secrets) || !restored.rng) {
+      throw new Error("The file is missing required world state.");
+    }
+    if (!window.confirm("Restore this world backup? The current world will be replaced.")) {
+      status.textContent = "Restore cancelled. Your current world is unchanged.";
+      return;
+    }
+
+    world = restored;
+    chats = {};
+    chatRoles = {};
+    ui = { ...ui, selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
+    closeSheet();
+    mapFx.fxInit = false;
+    mapFx.ripples.length = 0;
+    mapFx.wisps.length = 0;
+    lastSeenAt = Date.now();
+    save();
+    armTick();
+    renderAll();
+    status.textContent = "Backup restored — " + describeClock(world.clock) + ", seed " + world.seed + ".";
+  } catch (error) {
+    status.textContent = "Could not restore backup: " + String(error?.message || error);
+  }
+}
+
 function advance(ticks) {
   if (serviceMode) { toast("The background world sets its own pace — it is not ours to fast-forward."); return; }
   advanceOffline(ticks);
@@ -1692,7 +2023,7 @@ function resetWorld() {
   if (!confirm("Reset the world? All minds, chats, and events return to the seed state.")) return;
   world = freshWorld();
   chats = {};
-  ui = { selectedId: null, chatId: null, record: ui.record };
+  ui = { selectedId: null, chatId: null, record: ui.record, threadKind: "mind", threadTarget: null };
   mapFx.fxInit = false;
   mapFx.ripples.length = 0;
   mapFx.wisps.length = 0;
@@ -1705,6 +2036,14 @@ function resetWorld() {
 }
 
 /* ---------- tabs / wiring ---------- */
+function followThread(kind, target) {
+  ui.threadKind = kind;
+  ui.threadTarget = target;
+  ui.record = "threads";
+  save();
+  switchTab("record");
+}
+
 function switchTab(name) {
   credit("tab", name);
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
@@ -1817,6 +2156,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     t.addEventListener("click", () => switchTab(t.dataset.tab)));
   document.querySelectorAll(".rtab").forEach(t =>
     t.addEventListener("click", () => { ui.record = t.dataset.view; save(); renderRecord(); }));
+  $("sheet-follow-mind").addEventListener("click", () => {
+    if (ui.selectedId) followThread("mind", ui.selectedId);
+  });
+  $("sheet-ties").addEventListener("click", ev => {
+    const button = /** @type {HTMLElement|null} */ (ev.target)?.closest(".follow-pair-thread");
+    if (button) followThread("pair", button.dataset.a + "|" + button.dataset.b);
+  });
+  $("record-pane").addEventListener("click", ev => {
+    const target = /** @type {HTMLElement|null} */ (ev.target);
+    const secretButton = target?.closest(".follow-secret-thread");
+    if (secretButton) followThread("secret", secretButton.dataset.secret);
+    const pairButton = target?.closest(".follow-pair-thread");
+    if (pairButton) followThread("pair", pairButton.dataset.a + "|" + pairButton.dataset.b);
+  });
   $("btn-create").addEventListener("click", openCreate);
   $("btn-randomize").addEventListener("click", randomizeCreate);
   $("btn-do-create").addEventListener("click", doCreate);
@@ -1843,6 +2196,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("chat-send").addEventListener("click", sendChat);
   $("chat-input").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
   $("btn-save-admin").addEventListener("click", saveAdmin);
+  $("btn-export-world").addEventListener("click", downloadWorldBackup);
+  $("btn-import-world").addEventListener("click", () => {
+    if (serviceMode) {
+      $("backup-status").textContent = "Stop the background service before restoring a world backup.";
+      return;
+    }
+    $("import-world-file").click();
+  });
+  $("import-world-file").addEventListener("change", async ev => {
+    const input = /** @type {HTMLInputElement} */ (ev.target);
+    const file = input.files?.[0];
+    if (file) await restoreWorldBackup(file);
+    input.value = "";
+  });
   $("btn-tick").addEventListener("click", () => tick(true).then(() => renderAll()));
   $("btn-advance").addEventListener("click", () => advance(48));
   $("btn-advance-week").addEventListener("click", () => advance(336));

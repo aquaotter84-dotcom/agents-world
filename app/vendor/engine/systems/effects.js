@@ -47,8 +47,9 @@ function normalizeClaim(text) {
  * @param {Record<string, number>} deltas
  * @param {string} reason
  * @param {number} tick
+ * @param {string} [secretId]
  */
-function logRelationshipChange(world, from, to, before, deltas, reason, tick) {
+function logRelationshipChange(world, from, to, before, deltas, reason, tick, secretId) {
   const edge = edgeToward(from, to.id);
   const labels = {
     affinity: "affection", trust: "trust", fear: "fear", resentment: "resentment",
@@ -72,6 +73,7 @@ function logRelationshipChange(world, from, to, before, deltas, reason, tick) {
     text: `${from.name}'s view of ${to.name} changed: ${detail}, after ${reason}.`,
     significance: 0.46,
     regionId: from.regionId,
+    secretId,
     relationship: { reason, changes }
   });
 }
@@ -286,7 +288,7 @@ function applyOne(world, op, tick, meta) {
       // thread; the caller supplies a cause so routine churn stays out of history.
       const before = { ...edgeToward(from, to.id) };
       adjustEdge(from, to.id, op.deltas || {}, tick);
-      if (op.reason) logRelationshipChange(world, from, to, before, op.deltas || {}, op.reason, tick);
+      if (op.reason) logRelationshipChange(world, from, to, before, op.deltas || {}, op.reason, tick, op.secretId);
       if (op.deltas && (op.deltas.familiarity || op.deltas.affinity)) {
         const edge = edgeToward(from, to.id);
         edge.contacts += 1;
@@ -416,7 +418,9 @@ function applyOne(world, op, tick, meta) {
       const to = agentById(world, op.to);
       const from = agentById(world, op.from);
       if (!secret || !to) return null;
+      const alreadyHeld = secret.holders[to.id] !== undefined;
       learnSecret(world, secret, to.id, clamp(op.fidelity ?? 1, 0, 1));
+      const newlyLearned = !alreadyHeld && secret.holders[to.id] !== undefined;
       if (from) {
         const edge = edgeToward(from, to.id);
         edge.secretsShared += 1;
@@ -432,7 +436,15 @@ function applyOne(world, op, tick, meta) {
           secretId: secret.id
         }, world.nextId);
       }
-      return null;
+      return newlyLearned ? logEvent(world, {
+        kind: "secret",
+        agentId: from ? from.id : null,
+        subjectId: to.id,
+        text: `${from ? from.name : "Someone"} trusted ${to.name} with a secret.`,
+        significance: 0.38,
+        regionId: from ? from.regionId : to.regionId,
+        secretId: secret.id
+      }) : null;
     }
 
     case "secret_new": {

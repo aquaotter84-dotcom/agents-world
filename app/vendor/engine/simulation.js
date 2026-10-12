@@ -281,7 +281,7 @@ function resolveAndApply(world, agent, intent, ranked) {
     text: resolution.text,
     significance: resolution.significance,
     regionId: agent.regionId,
-    subjectId: resolution.subjectId,
+    subjectId: resolution.subjectId ?? intent.targetId ?? null,
     secretId: resolution.secretId,
     projectId: resolution.projectId || (intent.kind.startsWith("project_") ? world.project?.id : undefined),
     scene: resolution.scene

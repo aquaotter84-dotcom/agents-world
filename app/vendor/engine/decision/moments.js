@@ -398,7 +398,7 @@ function confideMoment(world, agent, intent, tick) {
       ops: [
         { op: "secret_share", secretId: secret.id, from: agent.id, to: target.id, fidelity: 1,
           memoryText: `${agent.name} told me something and asked me to hold it.`, memoryValence: -0.1, memorySalience: 0.75 },
-        { op: "edge", from: agent.id, to: target.id, deltas: { trust: 14, affinity: 8, familiarity: 8, secretsShared: 1 } },
+        { op: "edge", from: agent.id, to: target.id, deltas: { trust: 14, affinity: 8, familiarity: 8, secretsShared: 1 }, reason: "sharing a secret", secretId: secret.id },
         { op: "need", agent: agent.id, deltas: { connection: 26, meaning: 8, esteem: 4, energy: -3 } },
         { op: "need", agent: target.id, deltas: { esteem: 5, connection: 8 } },
         {
@@ -422,7 +422,7 @@ function confideMoment(world, agent, intent, tick) {
       ops: [
         { op: "secret_share", secretId: secret.id, from: agent.id, to: target.id, fidelity: 0.5,
           memoryText: `${agent.name} told me something, though it felt like there was more to it.`, memoryValence: 0, memorySalience: 0.55 },
-        { op: "edge", from: agent.id, to: target.id, deltas: { trust: 6, familiarity: 6, secretsShared: 1 } },
+        { op: "edge", from: agent.id, to: target.id, deltas: { trust: 6, familiarity: 6, secretsShared: 1 }, reason: "sharing part of a secret", secretId: secret.id },
         { op: "need", agent: agent.id, deltas: { connection: 12, energy: -2 } },
         {
           op: "memory",
@@ -501,7 +501,7 @@ function betrayMoment(world, agent, intent, tick) {
       ops: [
         { op: "secret_publish", secretId: secret.id, by: agent.id },
         { op: "standing", agent: agent.id, delta: world.config.standing.deedBetray },
-        { op: "edge", from: subject.id, to: agent.id, deltas: { trust: -60, affinity: -45, resentment: 65, fear: 10 } },
+        { op: "edge", from: subject.id, to: agent.id, deltas: { trust: -60, affinity: -45, resentment: 65, fear: 10 }, reason: "the secret being exposed in public", secretId: secret.id },
         { op: "need", agent: subject.id, deltas: { esteem: -26, connection: -14, meaning: -10 } },
         { op: "need", agent: agent.id, deltas: { esteem: 10, meaning: 12, connection: -8 } },
         { op: "mood", agent: subject.id, value: "bitter", durationTicks: 60, reason: "exposed" },
@@ -561,7 +561,7 @@ function betrayMoment(world, agent, intent, tick) {
                 memoryText: `${agent.name} let something slip about ${subject.name}, and it did not sound like an accident.`, memoryValence: -0.3, memorySalience: 0.7 }
             : { op: "need", agent: agent.id, deltas: { meaning: -6 } };
         })(),
-        { op: "edge", from: agent.id, to: subject.id, deltas: { resentment: -12, trust: -8 } },
+        { op: "edge", from: agent.id, to: subject.id, deltas: { resentment: -12, trust: -8 }, reason: "letting the secret slip", secretId: secret.id },
         { op: "need", agent: agent.id, deltas: { esteem: 5, meaning: 6, connection: -2 } },
         {
           op: "memory",
