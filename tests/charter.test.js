@@ -402,6 +402,19 @@ test("the prompt offers only admissible rules, and the parser drops scaffolding"
     "a refusal must not become a petition");
 });
 
+test("prompt-echo whispers never enter the charter (2026-10-12 leak)", () => {
+  const elio = `"Optionally add a second line: THOUGHT: <one short first-person sentence you would never say aloud>. The prompt only provided summary: "You are Elio. ... Right now: the Tidemarsh, day. Energy 45/100 — feeling steady. Level 3. Goal:"`;
+  const pim = `"We are told to "You are Pim." So we are Pim. We have some context: - "You are scout; quick feet, quicker eyes." - "Right now: the Crossroads, day. Energy 63/100 — feeling steady"`;
+  assert.deepEqual(parseCharterReply(elio, "whisper"), {}, "Elio's scaffold echo must be dropped");
+  assert.deepEqual(parseCharterReply(pim, "whisper"), {}, "Pim's scaffold echo must be dropped");
+  assert.deepEqual(
+    parseCharterReply(`WHISPER: ${elio}`, "whisper"), {},
+    "a WHISPER: line carrying scaffold must be dropped too");
+  const ok = parseCharterReply("WHISPER: The north wind took our stores.\nTHOUGHT: We will not starve.", "whisper");
+  assert.equal(ok.whisper, "The north wind took our stores.");
+  assert.equal(ok.thought, "We will not starve.");
+});
+
 test("the charter survives a save and reload, and an old save simply has no customs", () => {
   const { world, agent } = lab();
   seedBasis(world, "no_undermining");

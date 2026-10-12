@@ -437,9 +437,16 @@ export function parseCharterReply(raw, bodyKey, tokenKey) {
  * explaining the prompt has not proposed an approach, and letting that text
  * through would put the scaffolding into the world's record and the mind's own
  * memory — the same leak the app's reply sanitizer exists to catch.
+ *
+ * The echo patterns track the actual instruction templates in the prompt
+ * builders above (THOUGHT scaffolding, "Right now:" state lines, the "You are
+ * X, one of N minds" header). When the prompts change, this list must change
+ * with them — see the 2026-10-12 Charter leak (Elio/Pim whispers echoing
+ * "Optionally add a second line" / "We are told to") for what slips through
+ * otherwise.
  * @type {RegExp}
  */
-const NOT_AN_APPROACH = /\bas an ai\b|\blanguage model\b|\bi (can'?t|cannot|am unable to)\b|\bi'?m (just|only|not able)\b|\bi (need|must|should|will|have to) (to )?(respond|provide|write|generate)\b|\bhere (is|are) (the|your)\b|^\s*(sorry|apologies)\b|\bi don'?t have (a|any) (body|physical)\b|\bin third person\b|\bprovide one (short|vivid) sentence\b|\bnever mention\b/i;
+const NOT_AN_APPROACH = /\bas an ai\b|\blanguage model\b|\bi (can'?t|cannot|am unable to)\b|\bi'?m (just|only|not able)\b|\bi (need|must|should|will|have to) (to )?(respond|provide|write|generate)\b|\bhere (is|are) (the|your)\b|^\s*(sorry|apologies)\b|\bi don'?t have (a|any) (body|physical)\b|\bin third person\b|\bprovide one (short|vivid) sentence\b|\bnever mention\b|\boptionally add\b|you would never say aloud|\bwe are told to\b|\bwe have some context\b|answer with exactly|\bin your own voice\b|reply with (only|these lines)\b|\bthe prompt (only )?(provided|said|gave|told)\b|\bminds living in\b|\bwhat you are for\b|\byour condition:|\bright now:/i;
 
 /**
  * Parse a proposal answer: an approach in the mind's own words plus one token
@@ -503,9 +510,13 @@ export function parseCognitionReply(raw) {
     ACTION: "action", TARGET: "target", ABOUT: "about", PLAN: "plan", PRIORITY: "priority",
     BELIEF: "belief", BELIEF_ABOUT: "beliefAbout", SUMMARY: "summary", THOUGHT: "thought"
   };
+  // Free-text fields get the scaffolding guard; names and the confidence
+  // number cannot carry prompt echoes.
+  const guarded = new Set(["plan", "priority", "belief", "summary", "thought"]);
   for (const [label, key] of Object.entries(keys)) {
     const value = field(label);
     if (!value) continue;
+    if (guarded.has(key) && NOT_AN_APPROACH.test(value)) continue;
     /** @type {any} */ (out)[key] = value;
   }
   const rawConfidence = field("BELIEF_CONFIDENCE");

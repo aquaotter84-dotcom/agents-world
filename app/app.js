@@ -39,7 +39,7 @@ import { buildPrompt, parseReply } from "./vendor/server/prompt.js";
 import { migrateV1Save } from "./migrate.js";
 import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
-import { cleanReply } from "./reply-sanitize.js";
+import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
 import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette } from "./board.js";
 
 const STORE_KEY = "agentsworld.v2";
@@ -706,7 +706,10 @@ function renderCharter(pane) {
     for (const whisper of unheard.slice(0, 4)) {
       const teller = agentById(world, whisper.agentId);
       const about = whisper.aboutId ? agentById(world, whisper.aboutId) : null;
-      html += '<div class="whisper-row"><p class="whisper-text">“' + esc(whisper.text) + "”</p>" +
+      // Whispers already in the save predate the intake guard; never show a
+      // mind describing its own prompt.
+      const words = stripScaffolding(whisper.text);
+      html += '<div class="whisper-row"><p class="whisper-text">“' + esc(words == null ? "The words wouldn't come." : words) + "”</p>" +
         '<p class="note">' + esc(teller ? teller.name : "Somebody") +
         (about ? ", about " + esc(about.name) : "") + "</p>" +
         '<button class="btn small act-whisper" data-id="' + esc(whisper.id) + '">Act on it (' +
@@ -722,12 +725,14 @@ function renderCharter(pane) {
       const spec = /** @type {any} */ (RULE_KINDS)[petition.ruleKind] || {};
       const prior = precedentFor(charter, petition.ruleKind);
       const affordable = charter.influence >= (petition.cost || 0);
+      const ask = stripScaffolding(petition.text);
+      const because = petition.basis ? stripScaffolding(petition.basis) : "";
       html += '<div class="card petition-card" data-petition="' + esc(petition.id) + '">' +
         '<p class="eyebrow">' + esc(petition.kind === "law" ? "A proposed law" : "A proposed tradition") + "</p>" +
-        "<p class='petition-text'>“" + esc(petition.text) + "”</p>" +
+        "<p class='petition-text'>“" + esc(ask == null ? "The asking came out wrong." : ask) + "”</p>" +
         '<p class="note">' + esc(agent ? agent.name : "A mind") + " asked on Day " +
         dayOfTick(petition.tick) + "</p>" +
-        (petition.basis ? '<p class="note">Because: ' + esc(petition.basis) + "</p>" : "") +
+        (because ? '<p class="note">Because: ' + esc(because) + "</p>" : "") +
         '<p class="note">' + petition.support + " mind" + (petition.support === 1 ? "" : "s") +
         " behind it · " + esc(spec.gloss || describeRule(petition.ruleKind)) + "</p>" +
         (prior ? '<p class="note prior">You have ruled on this before — ' + esc(prior.ruling) + ".</p>" : "") +

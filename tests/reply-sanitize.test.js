@@ -8,7 +8,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cleanReply, looksLikePromptEcho } from "../app/reply-sanitize.js";
+import { cleanReply, looksLikePromptEcho, stripScaffolding } from "../app/reply-sanitize.js";
 
 const FABLE = { id: "fable", name: "Fable" };
 const OTHERS = [
@@ -64,4 +64,32 @@ test("cross-talk naming another mind without self is a misfire", () => {
 test("empty and blank replies are misfires", () => {
   assert.equal(cleanReply("", FABLE, OTHERS), null);
   assert.equal(cleanReply("   ", FABLE, OTHERS), null);
+});
+
+/* The 2026-10-12 Charter leak: "Told to you in private" showed raw prompt
+ * scaffolding on the keeper's phone (day-10 world, main @ 1b5476d). These are
+ * the exact leaked whisper texts. stripScaffolding (no cross-talk identity
+ * check — whispers may name another mind legitimately) must refuse them. */
+const ELIO_WHISPER = `"Optionally add a second line: THOUGHT: <one short first-person sentence you would never say aloud>. The prompt only provided summary: "You are Elio. ... Right now: the Tidemarsh, day. Energy 45/100, Connection 49/100, Esteem 79/100, Meaning 78/100 — feeling steady. Level 3. Goal:"`;
+const PIM_WHISPER = `"We are told to "You are Pim." So we are Pim. We have some context: - "You are scout; quick feet, quicker eyes. Was found asleep at the crossroads, clutching a map." - "Right now: the Crossroads, day. Energy 63/100, Connection 46/100, Esteem 32/100, Meaning 69/100 — feeling steady"`;
+
+test("Elio's echoed whisper instructions are a misfire", () => {
+  assert.equal(looksLikePromptEcho(ELIO_WHISPER), true);
+  assert.equal(stripScaffolding(ELIO_WHISPER), null);
+  assert.equal(cleanReply(ELIO_WHISPER, { id: "elio", name: "Elio" }, OTHERS), null);
+});
+
+test("Pim's echoed identity scaffolding is a misfire", () => {
+  assert.equal(looksLikePromptEcho(PIM_WHISPER), true);
+  assert.equal(stripScaffolding(PIM_WHISPER), null);
+});
+
+test("stripScaffolding keeps a whisper that names another mind", () => {
+  const whisper = "Juno has been taking more than her share of the firewood.";
+  assert.equal(stripScaffolding(whisper), whisper);
+});
+
+test("a single ordinary 'right now' without a colon is not an echo", () => {
+  assert.equal(looksLikePromptEcho("Right now the wind is cruel and the fire is low."), false);
+  assert.equal(stripScaffolding("Right now the wind is cruel and the fire is low."), "Right now the wind is cruel and the fire is low.");
 });

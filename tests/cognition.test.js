@@ -230,3 +230,22 @@ test("a cognition request that expires gets one engine action and cannot be answ
   assert.equal(lastPlan.source, "engine");
   assert.equal(resolveMoment(world, moment.id, { action: "project_contribute" }).ok, false);
 });
+
+test("scaffold echoes in cognition free-text fields are dropped, names are kept", () => {
+  const answer = parseCognitionReply([
+    "PLAN: Optionally add a second line: THOUGHT: <one short first-person sentence>.",
+    "ACTION: rest",
+    "TARGET: NONE",
+    "PRIORITY: We are told to keep the fire lit.",
+    "BELIEF: You are Juno, one of 13 minds living in a small, cold world.",
+    "BELIEF_CONFIDENCE: 0.5",
+    "SUMMARY: The prompt only provided summary statistics.",
+    "THOUGHT: Right now: the Tidemarsh, day. I feel steady."
+  ].join("\n"));
+  assert.equal(answer.action, "rest", "the action token is not prose and is kept");
+  assert.ok(!("plan" in answer), "scaffold PLAN dropped");
+  assert.ok(!("priority" in answer), "scaffold PRIORITY dropped");
+  assert.ok(!("belief" in answer), "identity-echo BELIEF dropped");
+  assert.ok(!("summary" in answer), "prompt-referencing SUMMARY dropped");
+  assert.ok(!("thought" in answer), "state-line THOUGHT dropped");
+});
