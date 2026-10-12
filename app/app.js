@@ -45,7 +45,9 @@ const WORLD_LAST = ["Reach", "Meridian", "Ward", "Threshold", "Crossing", "Holdi
 function worldNameFor(seed) {
   let h = 0;
   for (const c of String(seed)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return "The " + WORLD_FIRST[h % WORLD_FIRST.length] + " " + WORLD_LAST[(h >> 7) % WORLD_LAST.length];
+  // `>>>` not `>>`: a signed shift on a 32-bit hash goes negative and indexes
+  // the name table from the wrong end.
+  return "The " + WORLD_FIRST[h % WORLD_FIRST.length] + " " + WORLD_LAST[(h >>> 7) % WORLD_LAST.length];
 }
 const OLD_KEY = "agentsworld.v1";
 const BM_URL = "https://api.bluesminds.com/v1/chat/completions";
@@ -195,9 +197,13 @@ function tiesOf(a, limit = 5) {
   for (const [id, edge] of Object.entries(a.relations)) {
     const other = agentById(world, id);
     if (!other || other.retired) continue;
-    const weight = Math.abs(edge.affinity) + edge.resentment * 1.1 + edge.fear * 0.6;
+    const word = describeRelation(edge);
+    const weight = Math.abs(edge.affinity) + edge.resentment * 1.1 + edge.fear * 0.6 +
+      (edge.trust >= 65 || edge.trust <= 20 ? 14 : 0);
+    // "Neutral" is the absence of a tie. Only real familiarity earns a row.
+    if (word === "neutral" && weight < 26) continue;
     if (weight < 12) continue;
-    out.push({ other, edge, weight, word: describeRelation(edge) });
+    out.push({ other, edge, weight, word });
   }
   out.sort((x, y) => y.weight - x.weight);
   return out.slice(0, limit);
@@ -467,7 +473,8 @@ function renderNow() {
     "<span class=\"vital\">Day <b>" + stats.day + "</b></span>",
     '<span class="vital">' + esc(stats.phase) + " <b>" + stats.awakened + "</b> awake</span>",
     '<span class="vital">Secrets <b>' + (stats.secrets - stats.publicSecrets) + "</b> held, <b>" + stats.publicSecrets + "</b> out</span>",
-    '<span class="vital">Feuds <b>' + stats.conflicts + "</b></span>",
+    '<span class="vital" title="minds carrying a grudge against someone"><i class="vdot" style="background:var(--danger)"></i>Feuding <b>' +
+      stats.conflicts + "</b></span>",
     camps > 0
       ? '<span class="vital">Camps <b>' + camps + "</b></span>"
       : '<span class="vital">No camps yet</span>'
@@ -1029,7 +1036,7 @@ function rpgBlock(a) {
     '<div class="astat"><span>Level</span><b>' + a.level + "</b></div>" +
     '<div class="astat"><span>Energy</span>' + energyBar(a.needs.energy) + "<b>" + Math.round(a.needs.energy) + "</b></div>" +
     '<div class="astat"><span>Mood</span><b class="mood">' + esc(moodWord(a, t)) + "</b></div>" +
-    '<div class="astat"><span>XP</span><b>' + a.xp + "</b></div>" +
+    '<div class="astat"><span>XP</span><b>' + Math.round(a.xp) + "</b></div>" +
     "</div>" +
     '<div class="drives compact">' +
     driveBar("Foc", a.drives.focus) + driveBar("Soc", a.drives.social) +
@@ -1078,9 +1085,12 @@ function carryingBlock(a) {
     html += held.slice(0, 4).map(s => {
       const f = s.holders[a.id];
       const about = s.aboutId ? agentById(world, s.aboutId) : null;
+      // When the secret is about the mind holding it, saying so adds nothing.
+      const aboutBit = about && about.id !== a.id ? "about " + esc(about.name) + " · " : "";
       return '<div class="burden">' + esc(secretTextFor(s, f)) +
-        '<span class="bsrc">' + (about ? "about " + esc(about.name) + " · " : "") +
-        (f >= 0.85 ? "told straight" : f >= 0.6 ? "heard second-hand" : "half-remembered") + "</span></div>";
+        '<span class="bsrc">' + aboutBit +
+        (f >= 0.85 ? "told straight" : f >= 0.6 ? "heard second-hand" : "half-remembered") +
+        (s.isPublic ? " · and it is out now" : "") + "</span></div>";
     }).join("");
     if (held.length > 4) {
       html += '<p class="note">…and ' + (held.length - 4) + " more they have not found a use for.</p>";
@@ -1094,7 +1104,15 @@ function carryingBlock(a) {
 }
 
 function preoccupationBlock(a) {
-  const top = preoccupations(world, a, 3);
+  // Recall can surface the same line twice — a mind that heard one thing twice
+  // remembers it twice — but a list that repeats itself looks like a bug.
+  const seen = new Set();
+  const top = preoccupations(world, a, 5).filter(tr => {
+    const key = String(tr.text || "").trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 3);
   if (!top.length) return "";
   return '<span class="sec-tag">On their mind</span>' +
     top.map(tr => '<div class="burden">' + esc(String(tr.text || "").slice(0, 180)) + "</div>").join("");
