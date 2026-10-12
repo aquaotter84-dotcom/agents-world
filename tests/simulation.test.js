@@ -71,6 +71,19 @@ test("a mind that collapses comes back", () => {
   );
 });
 
+test("a completely sleeping world keeps ticking until minds wake without keeper input", () => {
+  const world = createWorld({ seed: 44 });
+  for (const agent of world.agents) {
+    agent.awake = false;
+    agent.needs.energy = 70;
+  }
+
+  const report = step(world);
+  assert.equal(world.clock.tick, 1, "the clock must advance even when nobody starts awake");
+  assert.ok(world.agents.some(agent => agent.awake), "sleep recovery should wake a mind by itself");
+  assert.ok(report.events.some(event => /woke on their own/.test(event.text)), "the recovery is recorded");
+});
+
 test("moments expire when nobody answers them", () => {
   // The engine must never be blocked on a model that is slow, absent, or dead.
   const world = createWorld({ seed: 8 });

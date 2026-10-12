@@ -21,18 +21,92 @@ import { agentById, regionName } from "../engine/model/world.js";
  */
 
 /**
+ * Build a periodic open-plan prompt for one of the two cognition-pilot minds.
+ * Context is assembled only from this mind's own memory, beliefs and side of
+ * its relationships; the action grammar is bounded, but no intent is preselected.
+ * @param {import("../engine/model/world.js").World} world
+ * @param {Moment} moment
+ */
+function buildCognitionPrompt(world, moment) {
+  const agent = agentById(world, moment.agentId);
+  if (!agent) return { messages: [], maxTokens: 0 };
+  const ctx = moment.context;
+  const castSize = world.agents.filter(a => !a.retired).length;
+  const lines = [
+    `You are ${ctx.agentName}, one of ${castSize} minds living in this world.`,
+    `You are ${agent.personality.toLowerCase()}. ${agent.backstory}`,
+    `You are a ${agent.class.toLowerCase()} by nature: ${flavour(agent.class)}`,
+    "",
+    `Right now: ${ctx.region}, ${ctx.phase}. ${ctx.regionBlurb}`,
+    `Your condition: ${ctx.stateLine}`,
+    `Your current goal: ${ctx.goal} (${Math.round((ctx.goalProgress || 0) * 100)}% complete).`,
+    "",
+    "This is your private, persistent inner record. Beliefs can be mistaken; do not treat them as omniscient facts."
+  ];
+  if (ctx.memorySummary) lines.push(`Your memory summary: ${ctx.memorySummary}`);
+  if (ctx.privatePriorities && ctx.privatePriorities.length) {
+    lines.push("Priorities you previously authored:");
+    for (const priority of ctx.privatePriorities.slice(0, 3)) lines.push(`  - ${priority}`);
+  }
+  if (ctx.privateBeliefs && ctx.privateBeliefs.length) {
+    lines.push("Private beliefs you currently hold:");
+    for (const belief of ctx.privateBeliefs.slice(0, 8)) lines.push(`  - ${belief}`);
+  }
+  if (ctx.memories && ctx.memories.length) {
+    lines.push("Recent memories that belong to you:");
+    for (const memory of ctx.memories.slice(0, 6)) lines.push(`  - ${memory}`);
+  }
+  if (ctx.knownMinds && ctx.knownMinds.length) {
+    lines.push("Other living minds (some are elsewhere):");
+    for (const other of ctx.knownMinds.slice(0, 14)) {
+      lines.push(`  - ${other.name} — ${other.region}; to you, ${other.relation}.`);
+    }
+  }
+  if (ctx.project) {
+    lines.push(`Shared work: ${ctx.project.title}, ${ctx.project.status}, ${Math.round(ctx.project.progress)}% complete. Next milestone: ${ctx.project.nextMilestone}.`);
+  }
+  lines.push(
+    "",
+    "Choose for yourself. No engine intent has been selected for you, and there is no scene-option menu. Propose a near-term plan and one action token. The engine alone validates targets and applies consequences; never invent effect values.",
+    "Allowed ACTION tokens: rest, observe, explore, pursue_goal, withdraw, seek_company, forge_bond, grant_favour, gossip, project_contribute, project_help, project_interfere.",
+    "TARGET is the exact name of another living mind for seek_company, forge_bond, grant_favour, gossip, project_help or project_interfere; otherwise write NONE. For gossip, ABOUT is the different mind the opinion concerns. For project_help choose someone already working; for project_interfere there must be a real grievance.",
+    "",
+    "Reply with these lines only. Keep private updates short; use NONE when you have nothing to add.",
+    "PLAN: <one sentence about what you intend and why>",
+    "ACTION: <one allowed action token>",
+    "TARGET: <exact mind name, or NONE>",
+    "ABOUT: <gossip subject's exact mind name, or NONE>",
+    "PRIORITY: <one self-authored priority, or NONE>",
+    "BELIEF: <one private belief you want to retain, or NONE>",
+    "BELIEF_CONFIDENCE: <number from 0 to 1>",
+    "BELIEF_ABOUT: <exact mind name the belief concerns, or NONE>",
+    "SUMMARY: <a faithful compact update to your private memory summary, or NONE>",
+    "THOUGHT: <one short private first-person thought, or NONE>"
+  );
+  return {
+    messages: [
+      { role: "system", content: lines.join("\n") },
+      { role: "user", content: `What does ${agent.name} choose to do next?` }
+    ],
+    maxTokens: 340
+  };
+}
+
+/**
  * Build the chat messages for a moment.
  * @param {import("../engine/model/world.js").World} world
  * @param {Moment} moment
  * @returns {{messages: {role: string, content: string}[], maxTokens: number}}
  */
 export function buildPrompt(world, moment) {
+  if (moment.kind === "cognition") return buildCognitionPrompt(world, moment);
   const agent = agentById(world, moment.agentId);
   if (!agent) return { messages: [], maxTokens: 0 };
   const ctx = moment.context;
 
   const lines = [];
-  lines.push(`You are ${ctx.agentName}, one of nine minds living in a small, cold world.`);
+  const castSize = world.agents.filter(a => !a.retired).length;
+  lines.push(`You are ${ctx.agentName}, one of ${castSize} minds living in a small, cold world.`);
   lines.push(`You are ${agent.personality.toLowerCase()}. ${agent.backstory}`);
   lines.push(`You are ${agent.class.toLowerCase()} by nature: ${flavour(agent.class)}`);
   lines.push("");
@@ -46,7 +120,9 @@ export function buildPrompt(world, moment) {
   if (ctx.targetName) {
     lines.push("");
     const who = ctx.targetPersonality ? ctx.targetPersonality.toLowerCase() : "hard to read";
-    lines.push(`${ctx.targetName} is with you. ${ctx.targetName} is ${who}.`);
+    lines.push(ctx.together
+      ? `${ctx.targetName} is here with you. ${ctx.targetName} is ${who}.`
+      : `${ctx.targetName} is in ${ctx.targetRegion || "another part of the world"}. ${ctx.targetName} is ${who}.`);
     lines.push(`You regard ${ctx.targetName} as ${ctx.relationPhrase}.`);
     if (ctx.targetMood) lines.push(`${ctx.targetName} seems ${ctx.targetMood}.`);
     if (ctx.targetStandingWord && ctx.targetStandingWord !== "unknown") {
@@ -101,10 +177,11 @@ export function buildPrompt(world, moment) {
  *
  * @param {string|null} raw
  * @param {Moment} moment
- * @returns {{optionId?: string, prose?: string, thought?: string}}
+ * @returns {{optionId?: string, prose?: string, thought?: string, action?: string, target?: string, about?: string, plan?: string, priority?: string, belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string}}
  */
 export function parseReply(raw, moment) {
   if (!raw) return {};
+  if (moment.kind === "cognition") return parseCognitionReply(raw);
   const text = String(raw).trim();
 
   /** @type {{optionId?: string, prose?: string, thought?: string}} */
@@ -136,6 +213,38 @@ export function parseReply(raw, moment) {
   const thought = text.match(/^\s*THOUGHT\s*[:\-]\s*(.+)$/im);
   if (thought) out.thought = tidy(thought[1]);
 
+  return out;
+}
+
+/**
+ * Parse a structured open-plan answer. No option number is consulted: the model
+ * has already proposed an action from the safe grammar instead of accepting an
+ * engine-selected intent.
+ * @param {string|null} raw
+ * @returns {{action?: string, target?: string, about?: string, plan?: string, priority?: string, belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string, thought?: string}}
+ */
+export function parseCognitionReply(raw) {
+  if (!raw) return {};
+  const text = String(raw).trim();
+  /** @param {string} label */
+  const field = label => {
+    const match = text.match(new RegExp(`^\\s*${label}\\s*[:\\-]\\s*(.*)$`, "im"));
+    return match ? tidy(match[1]) : "";
+  };
+  /** @type {ReturnType<typeof parseCognitionReply>} */
+  const out = {};
+  const keys = {
+    ACTION: "action", TARGET: "target", ABOUT: "about", PLAN: "plan", PRIORITY: "priority",
+    BELIEF: "belief", BELIEF_ABOUT: "beliefAbout", SUMMARY: "summary", THOUGHT: "thought"
+  };
+  for (const [label, key] of Object.entries(keys)) {
+    const value = field(label);
+    if (!value) continue;
+    /** @type {any} */ (out)[key] = value;
+  }
+  const rawConfidence = field("BELIEF_CONFIDENCE");
+  const confidence = rawConfidence ? Number(rawConfidence) : NaN;
+  if (Number.isFinite(confidence)) out.beliefConfidence = Math.max(0, Math.min(1, confidence));
   return out;
 }
 
@@ -177,5 +286,6 @@ function flavour(className) {
 export function describeMoment(world, moment) {
   const agent = agentById(world, moment.agentId);
   const other = moment.participants[1] ? agentById(world, moment.participants[1]) : null;
-  return `${agent ? agent.name : "?"} (${moment.kind}${other ? " with " + other.name : ""}) at ${regionName(world, agent ? agent.regionId : "")}`;
+  const label = moment.kind === "cognition" ? "self-authored plan" : moment.kind;
+  return `${agent ? agent.name : "?"} (${label}${other ? " with " + other.name : ""}) at ${regionName(world, agent ? agent.regionId : "")}`;
 }

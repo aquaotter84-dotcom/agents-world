@@ -38,7 +38,7 @@ A BluesMinds key changes the *voice*, not the world: with one, a language model 
 
 ## How the minds work
 
-While the app is open, a tick wakes 1–2 minds every N seconds (default 45; half an hour of world time passes each tick, so a world day is 24 real minutes). Each ticked mind scores its options against its needs, drives and relationships, and acts. The engine withholds its most significant beats and offers them to the model; anything unanswered within three ticks is decided by the engine using the same policy. All of it is pure and deterministic: given the same seed and the same answers, the world replays exactly.
+While the app is open, each tick advances the whole world by 30 minutes. Every awake mind gets an engine decision on that tick unless it is waiting on one of the engine's bounded model moments; sleeping minds continue to recover energy and wake on their own at the configured threshold. The app's default is one tick every 45 seconds, so one world day (48 ticks) takes 36 real minutes at that speed. The headless runner has its own configurable wall-clock interval. The engine offers only its most significant beats to the model; anything unanswered within three ticks is decided by the engine. Given the same seed and the same recorded model answers, the simulation replays exactly.
 
 ## Layout
 

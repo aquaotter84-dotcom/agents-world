@@ -183,7 +183,7 @@ test("the record carries a chronicle and the secrets people are keeping", async 
   try {
     // The opening ticks close at least one day, which is what a chronicle entry needs.
     const tabs = $$(doc, "#record-tabs .rtab");
-    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets", "Keeper"]);
+    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets", "Threads", "Keeper"]);
 
     tabs.find(t => t.dataset.view === "chronicle").click();
     const days = $$(doc, "#record-pane .day-card");
@@ -204,8 +204,13 @@ test("the record carries a chronicle and the secrets people are keeping", async 
 test("a mind's dossier shows who it is to everyone else, not just its stats", async () => {
   const { document: doc, restore } = await bootApp();
   try {
-    const card = $(doc, "#agents-list .agent-card");
-    assert.ok(card, "the Minds tab should list the cast by region");
+    const saved = JSON.parse(doc.defaultView.localStorage.getItem("agentsworld.v2"));
+    const savedWorld = JSON.parse(saved.world);
+    const pilot = savedWorld.agents.find((/** @type {any} */ agent) => agent.cognition && agent.cognition.enabled);
+    assert.ok(pilot, "the world should persist its small cognition pilot");
+    const card = $$(doc, "#agents-list .agent-card").find(element =>
+      element.querySelector(".aname")?.textContent.trim().startsWith(pilot.name));
+    assert.ok(card, "the Minds tab should list the pilot by region");
     card.querySelector(".act-open").click();
 
     const sheet = doc.getElementById("mind-sheet");
@@ -213,10 +218,41 @@ test("a mind's dossier shows who it is to everyone else, not just its stats", as
     assert.ok($$(doc, "#sheet-rpg .bar").length >= 1, "needs and drives are shown");
     assert.ok(text(doc, "sheet-ties").length > 0, "the dossier says how the mind stands with others");
     assert.ok(text(doc, "sheet-carrying").length > 0, "the dossier says what the mind is carrying");
+    assert.match(text(doc, "sheet-cognition"), /Private cognition|SELF-AUTHORED|No self-authored plan/,
+      "the dossier shows a pilot mind's durable plans and private cognition");
     // With no key there is no inner monologue to fetch, and the app must say so
     // rather than sit on "listening…" forever or throw.
     assert.match(text(doc, "sheet-thought"), /no inner monologue|Add a key/i);
     assert.equal(text(doc, "sheet-toggle"), "Sleep");
+  } finally { restore(); }
+});
+
+test("follow-this-thread connects mind, pair, and secret histories", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    const tabs = $$(doc, "#record-tabs .rtab");
+    tabs.find(tab => tab.dataset.view === "threads").click();
+    assert.match(text(doc, "thread-title"), /’s thread/);
+    const sectionNames = $$(doc, "#thread-detail .thread-section h3").map(el => el.textContent);
+    assert.ok(sectionNames.includes("Initiating incident"));
+    assert.ok(sectionNames.includes("Who learned what"));
+    assert.ok(sectionNames.includes("Relationship changes"));
+    assert.ok(sectionNames.includes("Subsequent events"));
+
+    const kind = doc.getElementById("thread-kind");
+    kind.value = "pair";
+    kind.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
+    assert.match(text(doc, "thread-title"), / and /);
+    assert.ok($$(doc, "#thread-detail .thread-relation").length >= 2,
+      "a pair thread shows the relationship in both directions");
+
+    tabs.find(tab => tab.dataset.view === "secrets").click();
+    const followSecret = $(doc, "#record-pane .follow-secret-thread");
+    assert.ok(followSecret, "each secret offers a direct follow link");
+    followSecret.click();
+    assert.match(text(doc, "thread-title"), /Secret thread/);
+    assert.ok($$(doc, "#thread-detail .thread-knowledge").length > 0,
+      "a secret thread shows who currently knows which version");
   } finally { restore(); }
 });
 
@@ -259,6 +295,35 @@ test("nothing in the render path writes to the simulation", async () => {
     assert.ok(edgeCounts.every((/** @type {number} */ n) => n <= before.agents.length - 1),
       "no mind knows more minds than exist");
   } finally { restore(); }
+});
+
+test("an all-asleep app world still advances and lets a mind wake without using the dossier toggle", async () => {
+  const { createWorld, serializeWorld } = await import("../engine/index.js");
+  const sleeping = createWorld({ seed: 409 });
+  for (const agent of sleeping.agents) {
+    agent.awake = false;
+    agent.needs.energy = 70;
+  }
+  const savedState = {
+    world: serializeWorld(sleeping),
+    settings: { tickSeconds: 45 },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+  const app = await bootApp({ savedState });
+  try {
+    assert.match(text(app.document, "live-badge"), /RECOVERING/);
+    const before = JSON.parse(JSON.parse(
+      app.window.localStorage.getItem("agentsworld.v2")
+    ).world).clock.tick;
+    app.document.getElementById("btn-tick").click();
+    await new Promise(r => setTimeout(r, 20));
+    const after = JSON.parse(JSON.parse(
+      app.window.localStorage.getItem("agentsworld.v2")
+    ).world);
+    assert.equal(after.clock.tick, before + 1);
+    assert.ok(after.agents.some((/** @type {any} */ agent) => agent.awake), "one sleeper wakes from engine recovery");
+    assert.match(text(app.document, "live-badge"), /SELF-RUNNING/);
+  } finally { app.restore(); }
 });
 
 test("when the background service is running, the app shows its world and does not tick on its own", async () => {
@@ -334,5 +399,111 @@ test("the keeper earns rank by what they do, and every mind has a face on screen
     // Each mind is drawn as a portrait, not an emoji in a circle.
     const portraits = doc.querySelectorAll("#agents-list .portrait svg");
     assert.ok(portraits.length >= 9, "every mind in the list has a portrait, got " + portraits.length);
+  } finally { app.restore(); }
+});
+
+test("Admin downloads a portable world-only backup without exporting the API key", async () => {
+  const app = await bootApp();
+  try {
+    const { window, document: doc } = app;
+    const captured = /** @type {{ blob: Blob|null, link: HTMLAnchorElement|null }} */ ({ blob: null, link: null });
+    Object.defineProperty(window.URL, "createObjectURL", {
+      configurable: true,
+      value: (/** @type {Blob} */ blob) => { captured.blob = blob; return "blob:agents-world-backup"; }
+    });
+    Object.defineProperty(window.URL, "revokeObjectURL", { configurable: true, value: () => {} });
+    /** @type {any} */ (window.HTMLAnchorElement.prototype).click = function () { captured.link = this; };
+
+    const stored = JSON.parse(window.localStorage.getItem("agentsworld.v2"));
+    const expectedWorld = JSON.parse(stored.world);
+    doc.getElementById("btn-export-world").click();
+
+    const exportedBlob = captured.blob;
+    const downloadLink = captured.link;
+    assert.ok(exportedBlob, "the app creates a downloadable JSON blob");
+    assert.ok(downloadLink, "the browser download is triggered");
+    assert.match(downloadLink.download, new RegExp(`agents-world-seed-${expectedWorld.seed}-day-${expectedWorld.clock.day}\\.json`));
+    const backup = JSON.parse(await exportedBlob.text());
+    assert.equal(backup.format, "agents-world-save");
+    assert.equal(backup.version, 1);
+    assert.deepEqual(backup.world, expectedWorld, "the backup contains the exact serialized simulation state");
+    assert.equal("settings" in backup, false, "local preferences and credentials are not part of the world file");
+    assert.match(text(doc, "backup-status"), /backup downloaded/i);
+  } finally { app.restore(); }
+});
+
+test("Admin restores a world backup and leaves local credentials and keeper data alone", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const current = createWorld({ seed: 101 });
+  runTicks(current, 8);
+  const savedState = {
+    world: serializeWorld(current),
+    settings: { apiKey: "local-only-secret", model: "local-model", tickSeconds: 45 },
+    chats: { [current.agents[0].id]: [{ role: "user", content: "a local conversation" }] },
+    chatRoles: {},
+    ui: {},
+    keeper: {},
+    lastSeenAt: Date.now()
+  };
+  const app = await bootApp({ savedState });
+  try {
+    const { window, document: doc } = app;
+    const imported = createWorld({ seed: 987654 });
+    runTicks(imported, 37);
+    const input = doc.getElementById("import-world-file");
+    const file = {
+      name: "agents-world-backup.json",
+      text: async () => JSON.stringify({
+        format: "agents-world-save",
+        version: 1,
+        exportedAt: "2026-01-02T03:04:05.000Z",
+        world: JSON.parse(serializeWorld(imported))
+      })
+    };
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    window.confirm = () => true;
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await new Promise(resolve => setImmediate(resolve));
+
+    const restoredState = JSON.parse(window.localStorage.getItem("agentsworld.v2"));
+    const restoredWorld = JSON.parse(restoredState.world);
+    assert.equal(restoredWorld.seed, imported.seed);
+    assert.equal(restoredWorld.clock.tick, imported.clock.tick);
+    assert.deepEqual(restoredWorld, JSON.parse(serializeWorld(imported)), "all replay-relevant world state is restored");
+    assert.deepEqual(restoredState.chats, {}, "chat history tied to the replaced world is cleared");
+    assert.equal(restoredState.settings.apiKey, "local-only-secret", "the device-only API key is neither exported nor overwritten");
+    assert.match(text(doc, "backup-status"), /Backup restored/);
+    assert.match(text(doc, "admin-world"), /seed 987654/);
+  } finally { app.restore(); }
+});
+
+test("Admin rejects unsupported backups without changing the current world", async () => {
+  const app = await bootApp();
+  try {
+    const { window, document: doc } = app;
+    const before = JSON.parse(window.localStorage.getItem("agentsworld.v2")).world;
+    const input = doc.getElementById("import-world-file");
+    const file = {
+      name: "future-backup.json",
+      text: async () => JSON.stringify({ format: "agents-world-save", version: 999, world: {} })
+    };
+    Object.defineProperty(input, "files", { configurable: true, value: [file] });
+    input.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(JSON.parse(window.localStorage.getItem("agentsworld.v2")).world, before);
+    assert.match(text(doc, "backup-status"), /format or version is not supported/i);
+  } finally { app.restore(); }
+});
+
+test("a background-owned world can be exported but its restore control is disabled", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const served = createWorld({ seed: 314 });
+  runTicks(served, 20);
+  const app = await bootApp({ serviceJson: serializeWorld(served) });
+  try {
+    app.document.querySelector('.tab[data-tab="admin"]').click();
+    assert.equal(app.document.getElementById("btn-import-world").disabled, true);
+    assert.match(text(app.document, "backup-status"), /background service owns this world/i);
   } finally { app.restore(); }
 });

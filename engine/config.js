@@ -307,6 +307,25 @@ export const DEFAULT_CONFIG = {
     debtUtilityPull: 1.1
   },
 
+  projects: {
+    /** Ticks before the same mind can interfere with shared construction again. */
+    interferenceCooldownTicks: 48,
+    /** Resentment needed before interference becomes a plausible engine choice. */
+    interferenceResentmentFloor: 22
+  },
+
+  cognition: {
+    /** Only this many starting minds receive periodic open-plan model calls. */
+    pilotCount: 2,
+    /** A pilot mind makes one model-authored plan this often, in world ticks. */
+    planIntervalTicks: 24,
+    /** Bound private cognition data written by model responses. */
+    maxBeliefs: 8,
+    maxPriorities: 3,
+    summaryMaxChars: 360,
+    planMaxChars: 220
+  },
+
   progression: {
     /**
      * Level curve: level = 1 + floor(sqrt(xp / divisor)).

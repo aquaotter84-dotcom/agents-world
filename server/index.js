@@ -21,9 +21,9 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createWorld, step, resolveMoment, describeWorld, worldStats, agentById, socialTemperature, serializeWorld, deserializeWorld } from "../engine/index.js";
+import { createWorld, step, describeWorld, worldStats, socialTemperature, serializeWorld, deserializeWorld } from "../engine/index.js";
 import { Llm } from "./llm.js";
-import { buildPrompt, parseReply, describeMoment } from "./prompt.js";
+import { createMomentWorker } from "./moment-worker.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
@@ -65,8 +65,12 @@ if (!FRESH && existsSync(SAVE_PATH)) {
   }
 }
 if (!world) world = createWorld({ seed: isNumeric(SEED) ? Number(SEED) : SEED });
-/** @type {import("../engine/model/world.js").World} */
-const activeWorld = world;
+const momentWorker = createMomentWorker({
+  world,
+  llm,
+  log,
+  onResolved: () => save()
+});
 
 log(resumed ? `Resumed the world from ${SAVE_PATH}` : `Created a new world (seed ${SEED}).`);
 log(describeWorld(world));
@@ -83,8 +87,6 @@ log("");
 
 let running = true;
 let tickCount = 0;
-/** @type {Promise<void>} */
-let inFlight = Promise.resolve();
 
 // A signal can arrive while the loop is asleep between ticks, and waiting out
 // the rest of a tick interval before exiting is no way to stop a service. The
@@ -99,35 +101,7 @@ const onStop = () => {
 process.on("SIGINT", onStop);
 process.on("SIGTERM", onStop);
 
-/**
- * Answer every pending moment we can afford to. Runs alongside the tick loop,
- * so a slow model never holds up the world — the engine expires anything that
- * takes too long.
- */
-async function drainMoments() {
-  if (!llm.available) return;
-  const pending = world.pending.slice();
-  for (const moment of pending) {
-    if (!running) return;
-    // It may have expired while we were waiting on the previous call.
-    if (!world.pending.some(m => m.id === moment.id)) continue;
-
-    const { messages, maxTokens } = buildPrompt(world, moment);
-    if (!messages.length) {
-      resolveMoment(world, moment.id, {});
-      continue;
-    }
-    const raw = await llm.complete(messages, { maxTokens });
-    const answer = parseReply(raw, moment);
-    const result = resolveMoment(world, moment.id, answer);
-    if (result.ok) {
-      const event = result.events[result.events.length - 1];
-      log(`  ${describeMoment(world, moment)} → ${event ? event.text : "(resolved)"}`);
-    }
-  }
-}
-
-async function tickOnce() {
+function tickOnce() {
   const report = step(world);
   tickCount += 1;
 
@@ -135,7 +109,9 @@ async function tickOnce() {
   if (report.moments.length) log(`tick ${report.tick} — ${report.moments.length} moment(s) offered to the model`);
   else if (report.events.length) log(`tick ${report.tick} — ${report.events[0].text}`);
 
-  await drainMoments();
+  // Model work is deliberately not awaited here. The next engine tick starts
+  // on schedule; pending moments expire and late HTTP replies are discarded.
+  void momentWorker.drain();
 }
 
 async function main() {
@@ -148,10 +124,11 @@ async function main() {
   let nextAt = Date.now();
 
   while (running && tickCount < MAX_TICKS) {
-    inFlight = tickOnce().catch(err => {
+    try {
+      tickOnce();
+    } catch (err) {
       console.error(`tick failed: ${err instanceof Error ? err.stack || err.message : err}`);
-    });
-    await inFlight;
+    }
 
     if (tickCount % SAVE_EVERY === 0) save();
     if (MAX_TICKS !== Infinity && tickCount % 25 === 0) {

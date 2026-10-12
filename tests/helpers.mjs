@@ -29,6 +29,15 @@ export function stubbedAnswer(world, moment) {
   };
   const agent = agentById(world, moment.agentId);
   if (!agent) return {};
+  if (moment.kind === "cognition") {
+    return {
+      plan: "I will pay attention to what the world needs next.",
+      action: "observe",
+      target: "NONE",
+      priority: "Notice what is changing around me",
+      summary: "I chose to look carefully before deciding what matters."
+    };
+  }
   let best = moment.options[0];
   let bestScore = -1;
   for (const option of moment.options) {
