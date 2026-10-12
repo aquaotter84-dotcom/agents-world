@@ -76,6 +76,7 @@ import { clamp } from "../config.js";
  * @property {number} tick
  * @property {string} [status]     open | resolved | lapsed
  * @property {string} [resolution]
+ * @property {number} [resolvedTick]
  */
 
 /**

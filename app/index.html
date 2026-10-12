@@ -29,7 +29,11 @@
         <div id="vitals"></div>
       </div>
 
+      <div id="want-card" class="card want-card" role="button" tabindex="0" title="What you are keeping: harmony, prosperity, legacy"></div>
+
       <div id="keeper-strip" class="card keeper-strip" role="button" tabindex="0" title="Your progress as keeper"></div>
+
+      <div id="hand-card" class="card hand-card"></div>
 
       <div id="map">
         <canvas id="world-canvas"></canvas>
@@ -37,7 +41,7 @@
         <button id="btn-create" title="Create a mind">+ Create</button>
         <div id="radial-menu" class="hidden" role="menu" aria-label="What to do about this mind"></div>
       </div>
-      <p id="map-hint">Tap a mind for its dossier. Tap and hold the board for whisper, petition, thread.</p>
+      <p id="map-hint">Tap a mind for its dossier, the crown for your own standing. Tap and hold the board: a mind, to bless it; a region, to set a sign over it; a dilemma, to stand in it.</p>
       <div id="project-card" class="card project-card"></div>
 
       <div id="activity-feed"></div>
@@ -104,6 +108,21 @@
         <p class="eyebrow">How fast the world lives</p>
         <div id="speed-row"></div>
         <p class="note" id="speed-note"></p>
+      </div>
+
+      <div class="card form">
+        <p class="eyebrow">The world away from this device</p>
+        <p class="note">Left empty, this app keeps its own world, and time missed while it was closed is
+          paid back on the next launch. Point it at a world that is already running somewhere else (the
+          README's "always-on world") and the world ticks whether or not this app is open: what happened
+          while you were gone is waiting in the Chronicle when you come back.</p>
+        <label>World address <span class="note">(optional)</span>
+          <input id="set-service" type="text" placeholder="https://your-world.example" autocomplete="off">
+        </label>
+        <div class="row">
+          <button id="btn-service-check" class="btn small">Check now</button>
+        </div>
+        <p id="service-status" class="note" aria-live="polite"></p>
       </div>
 
       <div class="card form">

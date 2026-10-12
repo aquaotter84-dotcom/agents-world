@@ -13,7 +13,7 @@
  * rather than a matter of care.
  */
 
-import { feudStage } from "./vendor/engine/index.js";
+import { feudStage, wantSummary, WANT_LABELS, meterWord, pendingFunerals, markedInterventions } from "./vendor/engine/index.js";
 
 /**
  * @typedef {import("./vendor/engine/model/world.js").World} World
@@ -162,6 +162,135 @@ export function projectPalette(world) {
 }
 
 /**
+ * What the world is burying, and where the board should say so.
+ *
+ * A funeral that has been called but not yet held is a gathering still coming:
+ * the mark pulses where the world will stand. Once the grave is filled the mark
+ * becomes a cairn that stays for a while — the board remembers, so a death is
+ * never a thing that happened off-screen.
+ *
+ * @param {World} world
+ * @returns {{kind: "funeral"|"grave", agentId: string, name: string, regionId: string, at: number, mourners: number}[]}
+ */
+export function mourningMarks(world) {
+  const mourning = world.mourning;
+  if (!mourning || !mourning.funerals) return [];
+  const tick = world.clock.tick;
+  const window = world.config?.mourning?.graveWindowTicks ?? 144;
+  /** @type {ReturnType<typeof mourningMarks>} */
+  const out = [];
+  for (const funeral of mourning.funerals) {
+    if (!funeral.held) {
+      out.push({
+        kind: "funeral",
+        agentId: funeral.agentId,
+        name: funeral.name,
+        regionId: funeral.regionId,
+        at: funeral.holdTick,
+        mourners: 0
+      });
+    } else if (tick - (funeral.heldTick ?? 0) <= window) {
+      out.push({
+        kind: "grave",
+        agentId: funeral.agentId,
+        name: funeral.name,
+        regionId: funeral.regionId,
+        at: funeral.heldTick ?? 0,
+        mourners: (funeral.mourners || []).length
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * What the keeper has already done to the world, and where.
+ *
+ * Apparitions, omens and blessings are the keeper's only way of being felt
+ * without speaking, so each one leaves a mark where it landed: a sign over the
+ * region it hung above, a halo on the mind — or the wall — it was aimed at, a
+ * pillar where the keeper stood while two minds were about to have the worst
+ * conversation of their lives. A mark is drawn while its window is open and
+ * lingers, dimmed, for a while after, so the board can be read after the fact.
+ *
+ * @param {World} world
+ * @returns {{kind: "omen"|"blessing"|"apparition", id: string, target: string, agentId: string|null, subjectId: string|null, regionId: string|null, dilemmaId: string|null, label: string, effect: string, text: string, cost: number, tick: number, live: boolean}[]}
+ */
+export function divineMarks(world) {
+  const divine = world.divine;
+  if (!divine) return [];
+  const tick = world.clock.tick;
+  const nameOf = (/** @type {string|null} */ id) =>
+    (id && world.agents.find((/** @type {any} */ a) => a.id === id)?.name) || null;
+  const regionOf = (/** @type {string|null} */ id) =>
+    (id && world.regions.find((/** @type {any} */ r) => r.id === id)?.name) || null;
+
+  /** @type {ReturnType<typeof divineMarks>} */
+  const out = [];
+  for (const iv of markedInterventions(divine, tick)) {
+    const kind = /** @type {"omen"|"blessing"|"apparition"} */ (iv.kind);
+    const who = nameOf(iv.agentId);
+    const other = nameOf(iv.subjectId);
+    const where = regionOf(iv.regionId);
+    const label = kind === "omen"
+      ? "a sign over " + (where || "the world")
+      : kind === "blessing"
+        ? iv.target === "work" ? "a light on the wall work" : "a light on " + (who || "a mind")
+        : "the keeper stood where " + (who && other ? who + " and " + other : who || "they") + " were";
+    out.push({
+      kind,
+      id: iv.id,
+      target: iv.target,
+      agentId: iv.agentId ?? null,
+      subjectId: iv.subjectId ?? null,
+      regionId: iv.regionId ?? null,
+      dilemmaId: iv.dilemmaId ?? null,
+      label,
+      effect: iv.effect,
+      text: iv.text,
+      cost: iv.cost,
+      tick: iv.tick,
+      live: tick < iv.expireTick
+    });
+  }
+  return out;
+}
+
+/**
+ * The keeper's own board: three rings, one per meter.
+ *
+ * Harmony, prosperity and legacy are the keeper's score, and a score that only
+ * lives in a panel is not on the board. This is the data the canvas needs to
+ * draw them as a ring at the corner of the map — value, weight, colour, the
+ * last act that moved each meter, and whether the world is going quiet under
+ * the keeper's feet.
+ *
+ * @param {World} world
+ * @returns {{meters: {key: string, label: string, value: number, word: string, color: string, delta: number, cause: string|null, drift: number}[], fallen: boolean, draining: boolean, quietDays: number, quietSince: number, asks: number, ignored: number}}
+ */
+export function keeperRing(world) {
+  const summary = wantSummary(world);
+  return {
+    meters: summary.meters.map(meter => ({
+      key: meter.key,
+      label: WANT_LABELS[meter.key].name,
+      value: meter.value,
+      word: meter.word || meterWord(meter.key, meter.value),
+      color: WANT_LABELS[meter.key].color,
+      delta: meter.delta,
+      cause: meter.cause,
+      drift: meter.drift
+    })),
+    fallen: summary.fallen,
+    draining: summary.quiet.draining,
+    quietDays: Math.floor(summary.quiet.since / 48),
+    quietSince: summary.quiet.since,
+    asks: summary.asks,
+    ignored: summary.ignored
+  };
+}
+
+/**
  * A one-line summary of the board's state, for tests and for accessibility.
  * @param {World} world
  */
@@ -170,11 +299,26 @@ export function describeBoard(world) {
   const counts = { petition: 0, whisper: 0, dilemma: 0 };
   for (const s of sigils) counts[s.kind] += 1;
   const palette = projectPalette(world);
+  const ring = keeperRing(world);
+  const want = ring.meters.map(m => `${m.label.toLowerCase()} ${Math.round(m.value)} (${m.word})`).join(", ");
+  const signs = divineMarks(world);
+  const signLine = signs.length
+    ? `${signs.length} sign${signs.length === 1 ? "" : "s"} of the keeper's still standing (${signs.map(m => m.kind).join(", ")})`
+    : "the keeper has left no sign on the world yet";
+  const marks = mourningMarks(world);
+  const called = marks.filter(m => m.kind === "funeral");
+  const graves = (world.mourning?.memorials || []).filter(m => m.kind === "death").length;
+  const mourningLine = called.length
+    ? `a funeral called for ${called[0].name} at ${called[0].regionId}`
+    : `the world has buried ${graves}`;
   return [
     `${counts.petition} petition${counts.petition === 1 ? "" : "s"} waiting`,
     `${counts.dilemma} dilemma${counts.dilemma === 1 ? "" : "s"} waiting`,
     `${counts.whisper} whisper${counts.whisper === 1 ? "" : "s"} unheard`,
     `${feudArcs(world).length} feud arc${feudArcs(world).length === 1 ? "" : "s"}`,
-    `the wall at ${Math.round(palette.progress)}%${palette.complete ? " and standing" : ""}`
+    `the wall at ${Math.round(palette.progress)}%${palette.complete ? " and standing" : ""}`,
+    mourningLine,
+    signLine,
+    `the keeper's want: ${want}${ring.fallen ? " (the world has gone quiet)" : ""}`
   ].join(" · ");
 }

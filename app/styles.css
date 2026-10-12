@@ -215,6 +215,22 @@ main { flex: 1; overflow-y: auto; padding: 0 12px 12px; -webkit-overflow-scrolli
 .chip.you { border-color: #3a2f5c; color: var(--accent2); }
 .chip.bad { border-color: #4a2a2a; color: #ffb4ac; }
 
+/* ---- the mourning chronicle: funerals and the memorials of the lost ---- */
+.mem-card { display: grid; gap: 6px; border-left: 3px solid #4b3a6e; }
+.mem-card .eyebrow { margin: 0; }
+.mem-card.memorial-coming { border-left-color: var(--gold); background: linear-gradient(90deg, rgba(251,191,36,0.05), var(--card) 45%); }
+.mem-card.memorial-departure { border-left-color: #24404d; }
+.mem-card .mem-name { font-family: Georgia, serif; font-size: 16px; color: #f0ecf6; }
+.mem-card .mem-text { margin: 0; font-size: 13px; line-height: 1.45; color: #d8d4e0; }
+.mem-card .mem-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
+.mem-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+  border: 1px solid #2a2a35; border-radius: 999px; padding: 2px 8px; color: var(--muted);
+}
+.mem-chip.tappable { cursor: pointer; border-color: #3a3a4a; }
+.mem-card .mem-heirs { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 3px; }
+.mem-card .mem-heir { font-size: 12px; color: #ffb4ac; }
+
 /* ---------- tab bar ---------- */
 #tabbar {
   display: flex; border-top: 1px solid #20202b; background: #101016;
@@ -468,7 +484,38 @@ textarea { resize: vertical; min-height: 56px; }
 .keeper-strip .ks-rank { font-weight: 700; letter-spacing: .02em; color: #f3d9a4; }
 .keeper-strip .ks-xp, .keeper-strip .ks-next { font-size: 12px; color: #9a9aa8; }
 .ks-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+
 .ks-bar > span { display: block; height: 100%; background: linear-gradient(90deg, #7a5a20, #f3d9a4); transition: width .4s; }
+
+/* ---------- the keeper's want: harmony, prosperity, legacy ---------- */
+.want-card { cursor: pointer; display: grid; gap: 8px; padding: 10px 14px; }
+.want-card .want-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.want-card .eyebrow { margin: 0; }
+.want-verdict { font-size: 12px; color: var(--muted); text-align: right; }
+.want-verdict.high { color: var(--green); }
+.want-verdict.draining { color: var(--gold); }
+.want-verdict.fallen, .want-verdict.bad { color: var(--danger); }
+.want-meters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.want-meter { display: grid; gap: 4px; min-width: 0; }
+.wm-top { display: flex; align-items: baseline; gap: 5px; }
+.wm-name { font-size: 10px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); }
+.wm-value { margin-left: auto; font-size: 15px; color: #f5efe2; }
+.wm-delta { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 5px; }
+.wm-delta.up { color: #0d0d12; background: var(--green); }
+.wm-delta.down { color: #0d0d12; background: var(--danger); }
+.wm-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+.wm-bar > span { display: block; height: 100%; border-radius: 3px; transition: width .4s; }
+.wm-note { font-size: 10px; line-height: 1.3; color: var(--muted); }
+.want-quiet { margin: 0; font-size: 12px; line-height: 1.4; color: var(--gold); }
+.want-quiet.fallen { color: var(--danger); font-weight: 700; }
+.want-foot { margin: 0; font-size: 11px; color: var(--muted); }
+.want-panel .want-meters { margin-top: 8px; }
+.want-ledger { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.wl-row { display: grid; grid-template-columns: 54px 96px 1fr; gap: 6px; font-size: 11px; align-items: baseline; }
+.wl-day { color: var(--muted); }
+.wl-bits { font-weight: 700; color: var(--green); }
+.wl-bits.drift { color: var(--muted); font-weight: 400; }
+.wl-cause { color: var(--muted); }
 .keeper-panel { display: grid; gap: 8px; }
 .keeper-panel .kp-rank { margin: 0; font-family: Georgia, serif; color: #f3d9a4; }
 .keeper-panel .kp-h { margin: 8px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aa8; }
@@ -525,3 +572,52 @@ textarea { resize: vertical; min-height: 56px; }
 .radial-item.disabled { opacity: .38; border-color: rgba(255,255,255,.14); }
 .radial-label { display: block; text-align: center; }
 @keyframes radial-pop { from { opacity: 0; scale: .82; } to { opacity: 1; scale: 1; } }
+
+/* ---- the keeper's hand: gods don't chat, they act ---- */
+.hand-card { display: grid; gap: 8px; padding: 10px 14px; }
+.hand-card .hand-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.hand-card .hand-head .eyebrow { margin: 0; }
+.hand-influence { font-size: 12px; color: #f3d9a4; }
+.hand-acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.hand-act {
+  display: grid; gap: 3px; text-align: left; padding: 8px 10px;
+  border-radius: 10px; border: 1px solid rgba(243,217,164,.28);
+  background: rgba(243,217,164,.05); color: #ece8dd;
+  font: 400 12px/1.35 system-ui;
+}
+.hand-act:hover { border-color: rgba(243,217,164,.6); }
+.hand-act:disabled { opacity: .55; border-color: rgba(255,255,255,.12); background: rgba(255,255,255,.03); }
+.hand-act .ha-top { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.hand-act .ha-name { font-weight: 700; }
+.hand-act .ha-live { font-weight: 400; color: #9a9aa8; }
+.hand-act .ha-cost { color: #9a9aa8; white-space: nowrap; }
+.hand-act .ha-why { color: #9a9aa8; }
+.hand-foot { margin: 0; font-size: 11px; color: #9a9aa8; }
+
+/* ---- signs in the charter: what the keeper did without saying anything ---- */
+.sign-card { display: grid; gap: 4px; border-color: rgba(196,170,240,.35); }
+.sign-card.live { background: rgba(196,170,240,.07); }
+.sign-card p { margin: 0; }
+.sign-card .note { display: block; }
+
+/* ---- "while you were away": what the world did without a witness ---- */
+.away-card {
+  border-color: rgba(238, 203, 116, 0.5);
+  background: linear-gradient(180deg, rgba(238, 203, 116, 0.09), transparent 70%);
+}
+.away-lines { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.away-lines p { margin: 0; }
+.away-line.death { color: #e8a6a1; }
+.away-line.inherited { color: #d9a2c4; font-style: italic; }
+.away-line.law, .away-line.role { color: #cfe3a8; }
+.away-line.feud { color: #e8b48a; }
+.away-line.wall { color: #9fd6c9; }
+.away-line.quiet { color: #e8a6a1; font-weight: 600; }
+.away-meters { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0; font-size: 12px; }
+.away-meter b { font-weight: 600; }
+.away-meter .up { color: #9fd8a0; }
+.away-meter .down { color: #e8a6a1; }
+.away-card .digest-dismiss { margin-top: 4px; }
+
+/* ---- where the world is kept: the live badge says so ---- */
+#live-badge.remote { border-color: rgba(159, 214, 201, 0.5); }

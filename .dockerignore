@@ -1,0 +1,9 @@
+# Nothing here is needed to run a world.
+.git
+.github
+data
+node_modules
+deploy
+tests
+tools/story.mjs
+*.md

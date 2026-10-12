@@ -30,7 +30,11 @@ import {
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
   levelProgress, pressingNeed,
   ruleOnPetition, resolveDilemma, actOnWhisper, describeRule, influenceWord,
-  RULE_KINDS, precedentFor, feudStage
+  RULE_KINDS, precedentFor, feudStage,
+  wantSummary, wantLog, WANT_LABELS, wantVerdict,
+  pendingFunerals, recentMemorials, mournDeparture,
+  interventionOptions, canIntervene, performIntervention, recentInterventions,
+  interventionFor, INTERVENTION_INFO
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -40,7 +44,8 @@ import { migrateV1Save } from "./migrate.js";
 import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
-import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette } from "./board.js";
+import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing, mourningMarks, divineMarks } from "./board.js";
+import { digestMark, awayDigest, digestLine } from "./digest.js";
 
 const STORE_KEY = "agentsworld.v2";
 /**
@@ -85,12 +90,14 @@ const ICONS = ["✦", "✧", "❖", "◉", "◎", "⛨", "⛉", "⚒", "☾", "�
 
 /* ---------- state ---------- */
 let world = null;
-let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45 };
+let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45, serviceUrl: "" };
 let chats = {};
 let chatRoles = {};
 let ui = { selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
 let lastSeenAt = Date.now();
 let keeper = emptyKeeper();
+/** The last "while you were away" digest, kept until the keeper has read it. */
+let lastDigest = null;
 
 /* ---------- the background service ----------
  * When the runner (server/index.js) is alive it owns the clock: the world keeps
@@ -102,9 +109,21 @@ let servicePollTimer = null;
 let serviceLost = false;
 const SERVICE_POLL_MS = 10000;
 
+/**
+ * Where the world is kept, if the keeper has pointed this app at a service:
+ * an empty setting means "whatever origin is serving this app".
+ */
+function serviceBase() {
+  return String(settings.serviceUrl || "").trim().replace(/\/+$/, "");
+}
+function serviceHost() {
+  const base = serviceBase();
+  if (!base) return "this server";
+  try { return new URL(base).host; } catch (e) { return base; }
+}
 async function probeService() {
   try {
-    const r = await fetch("api/world", { cache: "no-store" });
+    const r = await fetch(serviceBase() + "/api/world", { cache: "no-store" });
     if (!r.ok) return null;
     return deserializeWorld(await r.text());
   } catch (e) {
@@ -112,28 +131,84 @@ async function probeService() {
   }
 }
 
-function startServicePolling() {
-  if (servicePollTimer) clearInterval(servicePollTimer);
-  servicePollTimer = setInterval(async () => {
-    const next = await probeService();
-    if (!next) {
-      if (!serviceLost) toast("The background world has gone quiet — it will catch up when it is back.");
-      serviceLost = true;
-      return;
-    }
-    serviceLost = false;
-    if (next.clock.tick === world.clock.tick) return;
+async function pollServiceOnce() {
+  const next = await probeService();
+  if (!next) {
+    if (!serviceLost) toast("The world you were watching has gone quiet — this app will keep its own until it is back.");
+    serviceLost = true;
+    renderStats();
+    return false;
+  }
+  const wasLost = serviceLost;
+  serviceLost = false;
+  if (next.clock.tick === world.clock.tick) return true;
+  if (wasLost) {
+    // The service was down and is back: whatever happened to the world while
+    // it was away is an absence like any other.
+    const mark = digestMark(world);
     world = next;
+    const digest = awayDigest(mark, world, { hours: null, because: "service" });
+    if (!digest.empty && digest.ticks > 0) {
+      lastDigest = digest;
+      toast(esc(digestLine(digest)));
+    }
     save();
     renderAll();
-  }, SERVICE_POLL_MS);
+    return true;
+  }
+  world = next;
+  save();
+  renderAll();
+  return true;
+}
+
+function startServicePolling() {
+  if (servicePollTimer) clearInterval(servicePollTimer);
+  servicePollTimer = setInterval(() => { void pollServiceOnce(); }, SERVICE_POLL_MS);
+}
+
+/**
+ * The keeper's own check: look for a world at the configured address right now,
+ * and adopt it if it answers. This is a button, not a background hope — pointing
+ * the app at a hosted world should tell you whether it worked.
+ */
+async function checkServiceNow() {
+  const status = $("service-status");
+  if (status) status.textContent = "Looking for " + (serviceBase() || "a world on this server") + "…";
+  const next = await probeService();
+  if (!next) {
+    serviceLost = true;
+    renderStats();
+    if (status) {
+      status.textContent = serviceBase()
+        ? "Nothing answered at " + serviceBase() + ". This app is keeping its own world."
+        : "No world is being kept on this server. This app is keeping its own world.";
+    }
+    return;
+  }
+  const previouslySeen = digestMark(world);
+  world = next;
+  serviceMode = true;
+  serviceLost = false;
+  mapFx.fxInit = false;
+  const digest = awayDigest(previouslySeen, world, { hours: Math.round((Date.now() - lastSeenAt) / 3.6e5) / 10, because: "service" });
+  if (!digest.empty && digest.ticks > 0) lastDigest = digest;
+  if (servicePollTimer == null) startServicePolling();
+  save();
+  renderAll();
+  loadAdmin();
+  if (status) {
+    status.textContent = "Found it. Day " + world.clock.day + ", tick " + world.clock.tick +
+      ", kept by " + serviceHost() + ". This app is a window onto that world now.";
+  }
+  toast(esc(digest.empty ? "Connected to the world at " + serviceHost() + "." : digestLine(digest)));
 }
 
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       world: serializeWorld(world),
-      settings, chats, chatRoles, ui, keeper, lastSeenAt: Date.now()
+      settings, chats, chatRoles, ui, keeper, lastSeenAt: Date.now(), digest: lastDigest
     }));
   } catch (e) { /* storage full/blocked */ }
 }
@@ -152,6 +227,7 @@ function load() {
       ui = Object.assign(ui, s.ui);
       keeper = normalizeKeeper(s.keeper);
       lastSeenAt = s.lastSeenAt || Date.now();
+      lastDigest = s.digest || null;
       return { fresh: false };
     }
     // Migrate Jeremy's live v1 world — never start him over.
@@ -466,8 +542,11 @@ const KIND_TONE = {
   secret: "violet", confide: "violet",
   world: "ember", chronicle: "ember",
   favour: "ember", project: "gold",
-  arrival: "gold", departure: "mist",
+  arrival: "gold", departure: "mist", mourning: "violet",
   ritual: "violet",
+  // The keeper's own acts, and the world telling them it has gone quiet.
+  divine: "violet",
+  want: "ember",
   gossip: "mist", contact: "mist"
 };
 /* Stamp events "Day 3 · dusk" from the engine's own clock math. */
@@ -566,9 +645,12 @@ function renderStats() {
   const badge = $("live-badge");
   const live = awake > 0;
   badge.classList.toggle("paused", !live);
-  badge.innerHTML = '<span class="dot"></span>' + (!live ? "RECOVERING" : hasKey() ? "LIVE" : "SELF-RUNNING");
+  badge.classList.toggle("remote", serviceMode);
+  badge.innerHTML = '<span class="dot"></span>' +
+    (!live ? "RECOVERING" : serviceMode ? "REMOTE" : hasKey() ? "LIVE" : "SELF-RUNNING");
   $("live-note").textContent = !live
     ? "sleeping minds recover and wake on their own"
+    : serviceMode ? "kept by " + serviceHost()
     : hasKey() ? (settings.model || "model") : "the engine writes it";
 }
 function renderProject() {
@@ -631,6 +713,206 @@ function renderKeeperStrip() {
       ? esc(k.next.remaining + " XP to " + k.next.title) + " · tap for the record"
       : "The highest rank. Tap for the record.") + "</div>";
 }
+/**
+ * One meter of the keeper's want, as a bar, a number and the act that last
+ * moved it. Shared by the world screen and the keeper record so the two can
+ * never tell different stories about the same number.
+ * @param {{key: string, value: number, word: string, delta: number, cause: string|null, by: string|null, tick: number, drift: number}} meter
+ */
+function wantMeterHtml(meter) {
+  const label = WANT_LABELS[meter.key];
+  const pct = Math.max(0, Math.min(100, meter.value));
+  const moved = Math.abs(meter.delta) >= 0.5;
+  const badge = moved
+    ? '<span class="wm-delta ' + (meter.delta > 0 ? "up" : "down") + '">' +
+      (meter.delta > 0 ? "+" : "\u2212") + Math.abs(Math.round(meter.delta * 10) / 10) + "</span>"
+    : "";
+  const because = meter.cause
+    ? esc(meter.cause) + (meter.tick >= 0 ? " \u00b7 Day " + dayOfTick(meter.tick) : "")
+    : "nothing you have done has moved it yet";
+  const trend = meter.drift <= -0.5 ? "sinking" : meter.drift >= 0.5 ? "rising" : meter.word;
+  return '<div class="want-meter" data-meter="' + esc(meter.key) + '">' +
+    '<div class="wm-top"><span class="wm-name">' + esc(label.name) + "</span>" + badge +
+    '<b class="wm-value">' + Math.round(meter.value) + "</b></div>" +
+    '<div class="wm-bar"><span style="width:' + pct.toFixed(1) + "%;background:" + esc(label.color) + '"></span></div>' +
+    '<div class="wm-note">' + esc(trend) + " \u00b7 " + because + "</div>" +
+    "</div>";
+}
+
+/**
+ * The keeper's own standing, on the world screen. Harmony, prosperity and
+ * legacy, impossible to miss, each with the act that last moved it — plus the
+ * one warning that matters: a world that has stopped asking for anything.
+ */
+function renderWant() {
+  const el = $("want-card");
+  if (!el) return;
+  const summary = wantSummary(world);
+  const verdict = wantVerdict(world.want, world.config.want);
+  const quietDays = Math.floor(summary.quiet.since / 48);
+  let note = "";
+  if (summary.fallen) {
+    note = '<p class="want-quiet fallen">The world has gone quiet. Nothing asks you for anything any more \u2014 ' +
+      "it will take an ask to bring it back.</p>";
+  } else if (summary.quiet.draining) {
+    note = '<p class="want-quiet">Nobody has asked you for anything in ' + quietDays + " day" +
+      (quietDays === 1 ? "" : "s") + " \u2014 harmony is draining. A petition, a whisper or a dilemma would stop it.</p>";
+  }
+  el.innerHTML =
+    '<div class="want-head"><p class="eyebrow">What you are keeping</p>' +
+    '<span class="want-verdict ' + esc(verdict.tone) + '">' + esc(verdict.line) + "</span></div>" +
+    '<div class="want-meters">' + summary.meters.map(wantMeterHtml).join("") + "</div>" +
+    note +
+    '<p class="want-foot">' + summary.asks + " ask" + (summary.asks === 1 ? "" : "s") + " heard" +
+    (summary.ignored ? " \u00b7 " + summary.ignored + " let go unanswered" : "") +
+    " \u00b7 tap for the ledger</p>";
+}
+
+/**
+ * The keeper's want, with its ledger: every movement of every meter and the
+ * cause that moved it, newest first. This is the panel that answers "why is
+ * harmony falling" without a guess.
+ */
+function wantPanelHtml() {
+  const summary = wantSummary(world);
+  const verdict = wantVerdict(world.want, world.config.want);
+  const ledger = wantLog(world.want, 7).map(entry => {
+    const bits = Object.entries(entry.deltas).map(([meter, delta]) =>
+      (delta > 0 ? "+" : "\u2212") + Math.abs(Math.round(delta * 10) / 10) + " " + esc(meter));
+    return '<li class="wl-row"><span class="wl-day">Day ' + dayOfTick(entry.tick) + "</span>" +
+      '<span class="wl-bits ' + (entry.by === "drift" ? "drift" : "act") + '">' + bits.join(", ") + "</span>" +
+      '<span class="wl-cause">' + (entry.by === "drift" ? "the world's own condition" : esc(entry.cause)) + "</span></li>";
+  }).join("");
+  const lines = summary.meters.map(wantMeterHtml).join("");
+  return '<div class="card want-panel">' +
+    '<p class="eyebrow">The keeper\u2019s want</p>' +
+    '<p class="want-verdict ' + esc(verdict.tone) + '">' + esc(verdict.line) + "</p>" +
+    '<div class="want-meters">' + lines + "</div>" +
+    (summary.quiet.draining
+      ? '<p class="want-quiet' + (summary.fallen ? " fallen" : "") + '">' +
+        (summary.fallen
+          ? "The world is quiet. It has been " + summary.quiet.since + " ticks since anything asked you for anything."
+          : "Quiet for " + summary.quiet.since + " ticks. Harmony is draining a little every tick until the world asks again.") +
+        "</p>"
+      : "") +
+    '<h4 class="kp-h">What has moved them</h4>' +
+    (ledger ? '<ul class="want-ledger">' + ledger + "</ul>" : '<p class="note">Nothing has moved yet. Act, and the ledger fills.</p>') +
+    '<p class="note">' + summary.asks + " asks heard \u00b7 " + summary.ignored + " let go \u00b7 " +
+    "every meter is read off the world itself, so the numbers cannot disagree with what actually happened.</p>" +
+    "</div>";
+}
+
+/* ---------- the keeper's hand ----------
+ * Gods don't chat. What the keeper has instead of a voice is three things the
+ * world experiences and none of them is a sentence: a blessing, an omen, an
+ * apparition. All three are priced in influence, all three are aimed at
+ * something the world already has, and all three move the keeper's own meters —
+ * so the panel below says the price, the target and the reason it cannot be
+ * done, and nothing is ever hidden behind an unavailable button. */
+
+/** Where a point on the board sits, in regions: the omen's aim. */
+function regionAtPoint(x, y) {
+  if (!mapFx.w || !mapFx.h) return null;
+  const px = (x / mapFx.w) * 100;
+  const py = (y / mapFx.h) * 100;
+  let best = null, bestD = Infinity;
+  for (const r of REGIONS) {
+    const d = Math.hypot(r.x - px, (r.y - py) * 0.8);
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+
+/**
+ * What the keeper is aiming at, from whatever is on screen: a mind they have
+ * open, the work on the wall, the region where the worst quarrel is burning.
+ */
+function divineTargetFor(kind) {
+  const selected = ui.selectedId ? agentById(world, ui.selectedId) : null;
+  if (kind === "blessing") {
+    return selected && !selected.retired ? { agentId: selected.id } : { work: true };
+  }
+  if (kind === "omen") {
+    if (selected) return { regionId: selected.regionId };
+    // With nothing selected, the board still knows where the trouble is.
+    const hottest = feudArcs(world)[0];
+    const holder = hottest ? agentById(world, hottest.a) : null;
+    return holder ? { regionId: holder.regionId } : (world.project ? { regionId: world.project.regionId } : null);
+  }
+  const open = (world.charter?.dilemmas || []).find(d => d.status === "open");
+  return open ? { dilemmaId: open.id } : null;
+}
+
+/** A target in the keeper's own words, for the panel and the toast. */
+function targetLabel(target) {
+  if (!target) return "";
+  if (target.work) return "the work on the wall";
+  if (target.dilemmaId) {
+    const dilemma = (world.charter?.dilemmas || []).find(d => d.id === target.dilemmaId);
+    const names = (dilemma?.partyIds || []).map(id => agentById(world, id)?.name).filter(Boolean);
+    return names.length ? names.join(" and ") : "the dilemma";
+  }
+  if (target.agentId) return agentById(world, target.agentId)?.name || "a mind";
+  if (target.regionId) return regionName(world, target.regionId);
+  return "";
+}
+
+/**
+ * Spend the influence, and let the world say no in a sentence if it must.
+ * @param {"omen"|"blessing"|"apparition"} kind
+ * @param {{regionId?: string|null, agentId?: string|null, dilemmaId?: string|null, work?: boolean}|null} target
+ */
+function tryIntervene(kind, target) {
+  const result = performIntervention(world, kind, target);
+  if (!result.ok || !result.intervention) {
+    toast(result.reason || "You cannot do that.");
+    return false;
+  }
+  toast("Your " + esc(INTERVENTION_INFO[kind].name.toLowerCase()) + " lands over " +
+    esc(targetLabel(target)) + " — " + esc(result.intervention.effect));
+  save();
+  renderAll();
+  return true;
+}
+
+/**
+ * The keeper's hand, on the World screen: three acts, their price, where each
+ * is aimed right now, and the last thing the world did about it. Tapping a row
+ * spends; holding the board aims.
+ */
+function renderHand() {
+  const el = $("hand-card");
+  if (!el) return;
+  const options = interventionOptions(world);
+  const rows = options.map(option => {
+    const target = divineTargetFor(option.kind);
+    const check = option.enabled && target ? canIntervene(world, option.kind, target) : null;
+    const enabled = Boolean(check && check.ok);
+    const because = !option.enabled
+      ? option.reason
+      : !target
+        ? "Nothing to aim it at yet."
+        : check && !check.ok
+          ? check.reason
+          : "Aimed at " + targetLabel(target) + ".";
+    return '<button class="hand-act' + (enabled ? "" : " disabled") + '" data-act="' + esc(option.kind) + '"' +
+      (enabled ? "" : " disabled") +
+      ' title="' + esc(option.blurb) + '">' +
+      '<span class="ha-top"><span class="ha-name" style="color:' + esc(option.color) + '">' + esc(option.name) +
+      (option.live ? ' <b class="ha-live">' + option.live + " live</b>" : "") + "</span>" +
+      '<span class="ha-cost">' + option.cost + " influence</span></span>" +
+      '<span class="ha-why">' + esc(because) + "</span></button>";
+  }).join("");
+  const last = recentInterventions(world, 1)[0];
+  el.innerHTML =
+    '<div class="hand-head"><p class="eyebrow">Your hand</p>' +
+    '<span class="hand-influence">' + Math.round(world.charter?.influence ?? 0) + " influence</span></div>" +
+    '<div class="hand-acts">' + rows + "</div>" +
+    '<p class="hand-foot">' + (last
+      ? "Last: " + esc(last.effect)
+      : "Hold the board to aim these: a mind to bless, a region for a sign, a dilemma to stand in.") + "</p>";
+}
+
 function keeperPanelHtml() {
   const k = keeperSummary();
   const pct = Math.round(k.progress * 100);
@@ -642,7 +924,7 @@ function keeperPanelHtml() {
     '<div class="ach-title">' + (a.unlocked ? "✓ " : "") + esc(a.title) + "</div>" +
     '<div class="ach-desc">' + esc(a.desc) + "</div></div>").join("");
   const t = k.tallies;
-  return '<div class="card keeper-panel">' +
+  return wantPanelHtml() + '<div class="card keeper-panel">' +
     '<p class="eyebrow">The keeper</p>' +
     '<h3 class="kp-rank">' + esc(k.rank) + "</h3>" +
     '<div class="ks-bar"><span style="width:' + pct + '%"></span></div>' +
@@ -681,10 +963,35 @@ function renderCharter(pane) {
     '<h3>' + Math.round(charter.influence) + " influence</h3>" +
     '<div class="ks-bar"><span style="width:' + pct + '%"></span></div>' +
     '<p class="note">' + esc(influenceWord(charter)) + '</p>' +
+    '<p class="note">Spend it from the World screen — a blessing on a mind or the wall, an omen over a ' +
+    'region, an apparition at a dilemma. Hold the board to aim one.</p>' +
     '<p class="note">' + charter.rules.length + " enacted · " + charter.roles.length +
     " roles the world uses · " + charter.precedents.length + " precedents · " +
     charter.rulingsMade + " rulings made</p>" +
     "</div>";
+
+  const signs = recentInterventions(world, 4);
+  if (signs.length) {
+    html += '<p class="eyebrow section-gap">Signs and blessings</p>';
+    for (const sign of signs) {
+      const live = world.clock.tick < sign.expireTick;
+      const target = sign.target === "work" ? "the work on the wall"
+        : sign.target === "dilemma" ? "a dilemma"
+        : sign.agentId ? (agentById(world, sign.agentId)?.name || "a mind")
+        : regionName(world, sign.regionId);
+      html += '<div class="card sign-card ' + esc(sign.kind) + (live ? " live" : "") + '">' +
+        "<p><strong>" + esc(INTERVENTION_INFO[sign.kind].name) + "</strong> · " + esc(target) +
+        ' <span class="note">Day ' + dayOfTick(sign.tick) + " · " + sign.cost + " influence · " +
+        (live ? "still holding" : "spent") + "</span></p>" +
+        '<p class="note">' + esc(sign.effect) + "</p>" +
+        (sign.values && sign.values.length === 3
+          ? '<p class="note">' + WANT_LABELS.harmony.name + " " + Math.round(sign.values[0]) + " · " +
+            WANT_LABELS.prosperity.name + " " + Math.round(sign.values[1]) + " · " +
+            WANT_LABELS.legacy.name + " " + Math.round(sign.values[2]) + "</p>"
+          : "") +
+        "</div>";
+    }
+  }
 
   if (charter.wallRaised) {
     html += '<div class="card charter-win"><p class="eyebrow">The shared win</p>' +
@@ -812,9 +1119,37 @@ function renderRecord() {
     return;
   }
   if (ui.record === "chronicle") {
+    // "While you were away" first: it is the only page in the record written
+    // for the keeper's own absence, and it should be read before the days it
+    // summarizes.
+    if (lastDigest && !lastDigest.empty) {
+      const span = lastDigest.days > 0
+        ? lastDigest.days + " day" + (lastDigest.days === 1 ? "" : "s")
+        : lastDigest.ticks + " tick" + (lastDigest.ticks === 1 ? "" : "s");
+      const away = document.createElement("div");
+      away.className = "card away-card";
+      away.innerHTML =
+        '<div class="dhead"><span>While you were away</span><em>' + esc(span) + "</em></div>" +
+        digestLinesHtml(lastDigest) +
+        '<div class="away-meters">' + lastDigest.meters.map(m =>
+          '<span class="away-meter"><b style="color:' + esc(m.color) + '">' + esc(m.label) + "</b> " +
+          Math.round(m.to) + ' <span class="' + (m.delta > 0 ? "up" : m.delta < 0 ? "down" : "") + '">' +
+          (Math.abs(m.delta) < 0.05 ? "·" : (m.delta > 0 ? "+" : "\u2212") + Math.abs(m.delta)) + "</span></span>"
+        ).join("") + "</div>" +
+        (lastDigest.headline ? '<p class="note">The biggest thing: ' + esc(lastDigest.headline.text) + "</p>" : "") +
+        '<button class="btn ghost small digest-dismiss">I have read it</button>';
+      pane.appendChild(away);
+    }
+    // The mourning chronicle comes first when there is one: what the world has
+    // lost is the part of its history a keeper should not have to go looking
+    // for. Burials, the gatherings still coming, and who took up what.
+    renderMemoriam(pane);
     if (!world.chronicle.length) {
-      pane.innerHTML = '<p class="note">No day has closed yet. The first entry is written at the end of ' +
-        "Day 1 — a summary of everything the world decided worth remembering.</p>";
+      const empty = document.createElement("p");
+      empty.className = "note";
+      empty.textContent = "No day has closed yet. The first entry is written at the end of " +
+        "Day 1 — a summary of everything the world decided worth remembering.";
+      pane.appendChild(empty);
       return;
     }
     world.chronicle.slice().reverse().forEach(day => {
@@ -890,6 +1225,75 @@ function renderRecord() {
     p.style.textAlign = "center";
     p.textContent = "…and " + (world.events.length - shown.length) + " older lines in the record.";
     pane.appendChild(p);
+  }
+}
+
+/**
+ * The mourning chronicle: funerals still coming, and the memorials of every
+ * mind the world has lost. A death is meant to be touchable in the record, so
+ * this is a real page rather than a line in the feed — what they did, who
+ * stood at the grave, and which of their quarrels is still walking around.
+ * @param {HTMLElement} pane
+ */
+/** The digest's lines, shared by the away card and any other reader. */
+function digestLinesHtml(digest) {
+  return '<div class="away-lines">' + digest.lines
+    .map(l => '<p class="away-line ' + esc(l.kind) + '">' + esc(l.text) + "</p>")
+    .join("") + "</div>";
+}
+
+function renderMemoriam(pane) {
+  const mourning = world.mourning;
+  if (!mourning) return;
+  const called = pendingFunerals(mourning);
+  const memorials = recentMemorials(mourning, 12);
+  if (!called.length && !memorials.length) return;
+
+  const head = document.createElement("p");
+  head.className = "eyebrow section-gap";
+  head.textContent = "In memoriam";
+  pane.appendChild(head);
+
+  for (const funeral of called.slice().reverse()) {
+    const card = document.createElement("div");
+    card.className = "card mem-card memorial-coming";
+    card.innerHTML =
+      '<p class="eyebrow">A funeral called</p>' +
+      '<div class="mem-name">' + esc(funeral.name) + (funeral.epithet ? " " + esc(funeral.epithet) : "") + "</div>" +
+      '<p class="mem-text">The world is gathering at ' + esc(regionName(world, funeral.regionId)) +
+      ". They were " + esc(funeral.className) + (funeral.level ? ", level " + funeral.level : "") + ", and they " +
+      esc(funeral.deeds) + ".</p>" +
+      '<p class="note">Called on Day ' + dayOfTick(funeral.calledTick) + " — the board shows the gathering until it happens.</p>";
+    pane.appendChild(card);
+  }
+
+  for (const memorial of memorials) {
+    const card = document.createElement("div");
+    card.className = "card mem-card " + (memorial.kind === "death" ? "memorial-death" : "memorial-departure");
+    const mourners = memorial.mourners
+      .map(id => {
+        const mind = agentById(world, id);
+        if (!mind) return "";
+        const live = mind.retired ? "" : " mem-mind tappable";
+        return '<span class="mem-chip' + live + '"' + (mind.retired ? "" : ' data-mind="' + esc(mind.id) + '"') + ">" +
+          esc(mind.icon) + " " + esc(mind.name) + "</span>";
+      })
+      .join("");
+    const heirs = (memorial.inherited || []).map(pass => {
+      const heir = agentById(world, pass.heirId);
+      const about = agentById(world, pass.aboutId);
+      if (!heir || !about) return "";
+      return '<li class="mem-heir">' + esc(heir.name) + " carries what " + esc(memorial.name) +
+        " had against " + esc(about.name) + ".</li>";
+    }).join("");
+    const head = memorial.kind === "death" ? "Buried" : "Gone from the map";
+    card.innerHTML =
+      '<p class="eyebrow">' + head + " · Day " + memorial.day + "</p>" +
+      '<div class="mem-name">' + esc(memorial.name) + (memorial.epithet ? " " + esc(memorial.epithet) : "") + "</div>" +
+      '<p class="mem-text">' + esc(memorial.text) + "</p>" +
+      (mourners ? '<div class="mem-chips">' + mourners + "</div>" : "") +
+      (heirs ? '<ul class="mem-heirs">' + heirs + "</ul>" : "");
+    pane.appendChild(card);
   }
 }
 
@@ -1168,7 +1572,8 @@ const MOOD_COLOR = {
   lonely:     "#a78bfa",
   bitter:     "#c084fc",
   adrift:     "#5b7fa8",
-  exhausted:  "#b45454"
+  exhausted:  "#b45454",
+  grieving:   "#b8b2c4"
 };
 
 const mapFx = {
@@ -1694,6 +2099,125 @@ function drawBoardSigils(g, t) {
  * @param {CanvasRenderingContext2D} g
  * @param {number} t
  */
+/**
+ * The keeper's own marks on the board: an omen ring over a region, a halo on a
+ * blessed mind or across the wall, a pillar of light where the keeper stood at
+ * a dilemma. They fade when their window closes but they do not vanish at once,
+ * because a sign that changed a week should still be readable after it has
+ * stopped changing anything — and every one of them is tappable.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawDivine(g, t) {
+  const marks = divineMarks(world);
+  if (!marks.length) return;
+  const pos = new Map(livingAgents(world).map(a => [a.id, orbXY(a, t)]));
+  for (const mark of marks) {
+    const alpha = mark.live ? 1 : 0.42;
+    const breath = 0.5 + 0.5 * Math.sin(t * 0.0022);
+    if (mark.kind === "omen") {
+      const at = regionXY(mark.regionId, -18);
+      if (!at) continue;
+      g.save();
+      g.globalAlpha = alpha;
+      g.strokeStyle = "rgba(143,163,189," + (0.4 + 0.35 * breath).toFixed(2) + ")";
+      g.lineWidth = 1.6;
+      g.beginPath(); g.ellipse(at.x, at.y, 26, 14, 0, 0, Math.PI * 2); g.stroke();
+      // An eye at the top of the ring: a sign, not a weather effect.
+      g.fillStyle = "rgba(143,163,189,0.85)";
+      g.beginPath(); g.ellipse(at.x, at.y - 14, 7, 4.2, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "rgba(13,13,18,0.9)";
+      g.beginPath(); g.arc(at.x, at.y - 14, 1.9, 0, Math.PI * 2); g.fill();
+      g.restore();
+      mapFx.sigils.push({ kind: "omen", id: mark.id, x: at.x, y: at.y - 14, agentId: mark.agentId });
+    } else if (mark.kind === "blessing") {
+      const at = mark.target === "work" ? regionXY(mark.regionId, -6) : pos.get(mark.agentId || "");
+      if (!at) continue;
+      g.save();
+      g.globalAlpha = alpha;
+      g.strokeStyle = "rgba(243,217,164," + (0.35 + 0.4 * breath).toFixed(2) + ")";
+      g.lineWidth = 1.3;
+      g.beginPath(); g.arc(at.x, at.y, 26 + breath * 3, 0, Math.PI * 2); g.stroke();
+      g.setLineDash([3, 5]);
+      g.beginPath(); g.arc(at.x, at.y, 34 + breath * 4, 0, Math.PI * 2); g.stroke();
+      g.setLineDash([]);
+      g.restore();
+      mapFx.sigils.push({ kind: "blessing", id: mark.id, x: at.x, y: at.y - 26, agentId: mark.agentId });
+    } else {
+      const a = pos.get(mark.agentId || ""), b = pos.get(mark.subjectId || "");
+      const at = a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 12 } : regionXY(mark.regionId, -12);
+      if (!at) continue;
+      g.save();
+      g.globalAlpha = alpha;
+      const beam = g.createLinearGradient(at.x, at.y - 46, at.x, at.y + 8);
+      beam.addColorStop(0, "rgba(196,170,240,0)");
+      beam.addColorStop(0.55, "rgba(226,214,255," + (0.3 + 0.3 * breath).toFixed(2) + ")");
+      beam.addColorStop(1, "rgba(196,170,240," + (0.5 + 0.3 * breath).toFixed(2) + ")");
+      g.fillStyle = beam;
+      g.beginPath();
+      g.moveTo(at.x - 5, at.y - 46); g.lineTo(at.x + 5, at.y - 46);
+      g.lineTo(at.x + 9, at.y + 8); g.lineTo(at.x - 9, at.y + 8);
+      g.closePath(); g.fill();
+      g.strokeStyle = "rgba(226,214,255," + (0.5 + 0.4 * breath).toFixed(2) + ")";
+      g.lineWidth = 1.2;
+      g.beginPath(); g.arc(at.x, at.y + 6, 9 + breath * 2, 0, Math.PI * 2); g.stroke();
+      g.restore();
+      mapFx.sigils.push({ kind: "apparition", id: mark.id, x: at.x, y: at.y, agentId: mark.agentId });
+    }
+  }
+}
+
+/**
+ * What the world is burying.
+ *
+ * A funeral that has been called draws as a ring of small marks around a mound
+ * with a candle over it — the world gathering, still coming. A grave the world
+ * has just filled draws as a cairn: three stones, no pulse, because it is
+ * finished. Both read at a glance and both are tappable; a tap opens the
+ * mourning chronicle, where the same person is written down.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawMourning(g, t) {
+  for (const mark of mourningMarks(world)) {
+    const at = regionXY(mark.regionId, -34);
+    if (!at) continue;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 0.002);
+    g.save();
+    if (mark.kind === "funeral") {
+      g.strokeStyle = "rgba(196,170,240,0.5)";
+      g.lineWidth = 1.2;
+      g.beginPath(); g.arc(at.x, at.y, 13, 0, Math.PI * 2); g.stroke();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + t * 0.0004;
+        g.fillStyle = "rgba(232,224,208," + (0.3 + 0.4 * pulse).toFixed(2) + ")";
+        g.beginPath(); g.arc(at.x + Math.cos(a) * 13, at.y + Math.sin(a) * 13, 1.6, 0, Math.PI * 2); g.fill();
+      }
+      g.strokeStyle = "rgba(180,170,200,0.9)";
+      g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(at.x - 6, at.y + 3); g.quadraticCurveTo(at.x, at.y - 6, at.x + 6, at.y + 3); g.stroke();
+      g.fillStyle = "rgba(251,191,36," + (0.45 + 0.45 * pulse).toFixed(2) + ")";
+      g.beginPath(); g.arc(at.x, at.y - 10, 2.2, 0, Math.PI * 2); g.fill();
+      g.font = "700 8px system-ui";
+      g.textAlign = "center";
+      g.fillStyle = "rgba(226,214,240,0.85)";
+      g.fillText("GATHERING", at.x, at.y + 22);
+    } else {
+      g.fillStyle = "rgba(150,146,158,0.85)";
+      g.beginPath(); g.ellipse(at.x, at.y + 4, 7, 2.5, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "rgba(176,170,182,0.9)";
+      g.beginPath(); g.ellipse(at.x, at.y + 0.5, 4.6, 2, 0, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.ellipse(at.x, at.y - 2.6, 2.8, 1.7, 0, 0, Math.PI * 2); g.fill();
+      g.font = "700 8px system-ui";
+      g.textAlign = "center";
+      g.fillStyle = "rgba(198,192,206,0.72)";
+      g.fillText(mark.name.toUpperCase(), at.x, at.y + 14);
+    }
+    g.restore();
+    mapFx.sigils.push({ kind: mark.kind, id: mark.agentId, x: at.x, y: at.y, agentId: mark.agentId });
+  }
+}
+
 function drawConstellations(g, t) {
   const pos = new Map(livingAgents(world).map(a => [a.id, orbXY(a, t)]));
   for (const thread of constellations(world)) {
@@ -1721,6 +2245,76 @@ function drawConstellations(g, t) {
     g.restore();
     mapFx.constellations.push({ id: secret.id, x: cx, y: cy, holders: holders.length });
   }
+}
+
+/**
+ * Where the keeper's crown sits, and how far a tap reaches. This is layout
+ * rather than paint: it is computed from the board's size so the hit test works
+ * from the first moment the board exists, not only after a frame has been
+ * drawn.
+ */
+function keeperRingAt() {
+  const w = Math.max(50, mapFx.w || 0);
+  return { x: w - 44, y: 42, r: 30 };
+}
+
+/**
+ * The keeper's own standing, drawn where it cannot be missed: three concentric
+ * arcs in the board's top-right corner, one per meter — harmony outermost,
+ * legacy closest to the crown — each filling clockwise from the top like a
+ * clock face. The hollow part of a ring is as much a message as the filled
+ * part: a meter down to a sliver is visible from across the room without
+ * opening anything.
+ *
+ * This is the keeper's one mark on the board that belongs to no mind. Tapping
+ * it opens their record; when the world is going quiet the whole puck wears a
+ * slow red pulse, so the lose condition is legible before the words say so.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawKeeperRing(g, t) {
+  const ring = keeperRing(world);
+  const { x: cx, y: cy, r } = keeperRingAt();
+  const START = -Math.PI / 2;
+  const SWEEP = Math.PI * 1.5;
+  g.save();
+  // A dark puck first, so the arcs read over any terrain and the corner always
+  // looks like a control rather than weather.
+  const draining = ring.draining || ring.fallen;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 0.0026);
+  g.fillStyle = "rgba(13,13,18,0.62)";
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = draining
+    ? "rgba(248,113,113," + (0.25 + 0.45 * pulse).toFixed(2) + ")"
+    : "rgba(245,225,184,0.30)";
+  g.lineWidth = 1.2;
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  // Three arcs, outermost first, each a quarter-turn apart in radius.
+  ring.meters.forEach((meter, i) => {
+    const rr = r - 4 - i * 6;
+    g.lineCap = "round";
+    g.lineWidth = 3.6;
+    g.strokeStyle = "rgba(255,255,255,0.13)";
+    g.beginPath(); g.arc(cx, cy, rr, START, START + SWEEP); g.stroke();
+    const frac = Math.max(0, Math.min(1, meter.value / 100));
+    if (frac > 0.005) {
+      g.strokeStyle = hexA(meter.color, ring.fallen ? 0.55 : 0.95);
+      g.beginPath(); g.arc(cx, cy, rr, START, START + SWEEP * frac); g.stroke();
+    }
+  });
+  // The crown at the centre: small, always present, never a number.
+  g.fillStyle = ring.fallen ? "rgba(180,130,130,0.85)" : "rgba(251,191,36,0.92)";
+  g.beginPath();
+  g.moveTo(cx - 7, cy + 3);
+  g.lineTo(cx - 7, cy - 2.5);
+  g.lineTo(cx - 3.5, cy + 0.5);
+  g.lineTo(cx, cy - 4.5);
+  g.lineTo(cx + 3.5, cy + 0.5);
+  g.lineTo(cx + 7, cy - 2.5);
+  g.lineTo(cx + 7, cy + 3);
+  g.closePath();
+  g.fill();
+  g.restore();
 }
 
 function drawMapFrame(t) {
@@ -1762,6 +2356,10 @@ function drawMapFrame(t) {
   }
   // what is waiting on the keeper, drawn last so it is never buried
   drawBoardSigils(g, t);
+  // and what the keeper has already done to the world, under the lighter marks
+  drawDivine(g, t);
+  drawMourning(g, t);
+  drawKeeperRing(g, t);
   // ripples
   fx.ripples = fx.ripples.filter(rp => t - rp.t0 < 900);
   for (const rp of fx.ripples) {
@@ -1852,6 +2450,12 @@ function initCanvas() {
 
   /** What is under a point on the board: a sigil, a thread, or a mind. */
   const hitTest = (x, y) => {
+    // The keeper's own crown reads first: it is the one mark on the board that
+    // belongs to no mind, so it must never be buried under one passing by.
+    {
+      const crown = keeperRingAt();
+      if (Math.hypot(crown.x - x, crown.y - y) <= crown.r) return { kind: "want", id: "want", agentId: null };
+    }
     for (const sig of mapFx.sigils) {
       if (Math.hypot(sig.x - x, sig.y - y) < 16) return { kind: sig.kind, id: sig.id, agentId: sig.agentId };
     }
@@ -1892,6 +2496,28 @@ function initCanvas() {
     const hit = hitTest(at.x, at.y);
     if (!hit) { closeRadial(); return; }
     if (hit.kind === "mind") openSheet(hit.id);
+    else if (hit.kind === "want") {
+      ui.record = "keeper";
+      save();
+      switchTab("record");
+      renderRecord();
+    }
+    else if (hit.kind === "omen" || hit.kind === "blessing" || hit.kind === "apparition") {
+      const sign = interventionFor(world, hit.id);
+      if (sign) {
+        toast("Your " + esc(sign.kind) + " on Day " + dayOfTick(sign.tick) + " — " + esc(sign.effect));
+      }
+      ui.record = "charter";
+      save();
+      switchTab("record");
+      renderRecord();
+    }
+    else if (hit.kind === "funeral" || hit.kind === "grave") {
+      ui.record = "chronicle";
+      save();
+      switchTab("record");
+      renderRecord();
+    }
     else if (hit.kind === "thread") followThread("secret", hit.id);
     else if (hit.kind === "petition") { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
     else if (hit.kind === "dilemma" || hit.kind === "whisper") { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
@@ -1984,6 +2610,52 @@ function openRadial(x, y, hit) {
       run: () => { if (agent) openSheet(agent.id); }
     }
   ];
+
+  // Gods don't chat: the three things the keeper can do without saying a word.
+  // Each is offered only where it could actually land — a blessing on the mind
+  // under the press, an omen over the region under it, an apparition where a
+  // dilemma is already burning — and each says why when it cannot.
+  const region = regionAtPoint(x, y);
+  if (region) {
+    const omenTarget = { regionId: region.id };
+    const omenCheck = canIntervene(world, "omen", omenTarget);
+    items.push({
+      id: "omen",
+      label: "Set omen",
+      hint: omenCheck.ok
+        ? "A sign over " + region.name + " — " + (omenCheck.cost || 0) + " influence."
+        : (omenCheck.reason || "You cannot set a sign there."),
+      disabled: !omenCheck.ok,
+      run: () => tryIntervene("omen", omenTarget)
+    });
+  }
+  if (agent) {
+    const blessTarget = { agentId: agent.id };
+    const blessCheck = canIntervene(world, "blessing", blessTarget);
+    items.push({
+      id: "blessing",
+      label: "Bless",
+      hint: blessCheck.ok
+        ? "A light on " + agent.name + " — " + (blessCheck.cost || 0) + " influence."
+        : (blessCheck.reason || "You cannot bless them."),
+      disabled: !blessCheck.ok,
+      run: () => tryIntervene("blessing", blessTarget)
+    });
+    const theirs = (world.charter?.dilemmas || []).find(d => d.status === "open" && d.partyIds.includes(agent.id));
+    if (theirs) {
+      const appearTarget = { dilemmaId: theirs.id };
+      const appearCheck = canIntervene(world, "apparition", appearTarget);
+      items.push({
+        id: "apparition",
+        label: "Appear",
+        hint: appearCheck.ok
+          ? "Stand with them and say nothing — " + (appearCheck.cost || 0) + " influence."
+          : (appearCheck.reason || "You cannot appear there."),
+        disabled: !appearCheck.ok,
+        run: () => tryIntervene("apparition", appearTarget)
+      });
+    }
+  }
 
   const mapRect = $("map").getBoundingClientRect();
   const cvRect = mapFx.cv ? mapFx.cv.getBoundingClientRect() : mapRect;
@@ -2284,6 +2956,9 @@ function agentCard(a) {
     if (!confirm("Retire " + a.name + " from the world? This cannot be undone.")) return;
     a.retired = true;
     logEvent(world, { kind: "act", agentId: null, text: a.name + " retired from the world and walked beyond the map's edge.", significance: 0.5 });
+    // Even the keeper's own hand does not produce a quiet despawn: the world
+    // notes the absence and the memorial goes into the mourning chronicle.
+    mournDeparture(world, a);
     delete chats[a.id];
     if (ui.selectedId === a.id) ui.selectedId = null;
     if (ui.chatId === a.id) { ui.chatId = null; showPicker(); }
@@ -2449,6 +3124,14 @@ const SPEEDS = [
 function loadAdmin() {
   $("set-key").value = settings.apiKey || "";
   $("set-model").value = settings.model || "openai/gpt-oss-20b";
+  $("set-service").value = settings.serviceUrl || "";
+  const serviceStatus = $("service-status");
+  if (serviceStatus) {
+    serviceStatus.textContent = serviceMode
+      ? "Watching the world kept by " + serviceHost() + ". It ticks whether or not this app is open."
+      : "This app is keeping its own world — time missed while it was closed is paid back on launch, up to " +
+        CATCHUP_MAX_HOURS + " hours.";
+  }
   $("btn-import-world").disabled = serviceMode;
   $("backup-status").textContent = serviceMode
     ? "The background service owns this world. Download a backup here, but stop the service before restoring one."
@@ -2470,13 +3153,21 @@ function renderSpeeds() {
     });
     row.appendChild(b);
   });
-  $("speed-note").textContent = "Currently one tick every " + (settings.tickSeconds || 45) + " seconds. " +
-    "Half an hour of world time passes each tick, and the world only ticks while the app is open — " +
-    "time missed is paid back on the next launch.";
+  $("speed-note").textContent = serviceMode
+    ? "This app is a window onto a world kept elsewhere, so these settings only matter when it is not."
+    : "Currently one tick every " + (settings.tickSeconds || 45) + " seconds. " +
+      "Half an hour of world time passes each tick, and the world only ticks while the app is open — " +
+      "time missed is paid back on the next launch. Point the app at a world kept elsewhere (below) " +
+      "and it ticks without this app at all.";
 }
 function saveAdmin() {
   settings.apiKey = $("set-key").value.trim();
   settings.model = $("set-model").value.trim() || "openai/gpt-oss-20b";
+  const rawService = $("set-service").value.trim().replace(/\/+$/, "");
+  // Forgiving on purpose: "my-world.up.railway.app" is a reasonable thing to
+  // paste, and https is the only sane default for a host that is not yours.
+  settings.serviceUrl = rawService && !/^https?:\/\//i.test(rawService) ? "https://" + rawService : rawService;
+  $("set-service").value = settings.serviceUrl;
   save(); armTick(); renderAll();
   $("admin-status").textContent = hasKey()
     ? "Saved. " + (settings.model || "The model") + " now writes the world's biggest moments. First tick in ~" +
@@ -2611,7 +3302,7 @@ function renderAdminWorld() {
 function renderAll() {
   credit("day", world.clock.day);
   renderKeeperStrip();
-  renderNow(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
+  renderNow(); renderWant(); renderHand(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
   renderAgents(); renderAdminWorld();
   const selected = ui.selectedId ? agentById(world, ui.selectedId) : null;
   if (selected && !$("mind-sheet").classList.contains("hidden")) {
@@ -2659,25 +3350,48 @@ function catchUp() {
   const ticks = Math.min(missed, CATCHUP_CAP_TICKS, Math.floor((CATCHUP_MAX_HOURS * 3600) / secs));
   if (ticks < 2) return 0;
   const before = world.clock.day;
+  // What the keeper last saw, taken before the world moves under them: the
+  // digest is the difference between those two states and nothing else.
+  const mark = digestMark(world);
   advanceOffline(ticks);
   mapFx.fxInit = false;
-  return { ticks, days: world.clock.day - before, hours: Math.round(hours * 10) / 10 };
+  const digest = awayDigest(mark, world, { hours: Math.round(hours * 10) / 10, because: "offline" });
+  if (!digest.empty) lastDigest = digest;
+  return { ticks, days: world.clock.day - before, hours: Math.round(hours * 10) / 10, digest };
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const serviceWorld = await probeService();
+  // The keeper's own settings first: the world they watch may be kept at an
+  // address only their save knows about.
   const { fresh } = load();
+  const serviceWorld = await probeService();
   initCanvas();
 
   // A brand-new world should not open as an empty map.
   let seeded = 0;
   if (serviceWorld) {
-    // The service has been living this world all along: adopt it as it is.
+    // The service has been living this world all along: adopt it as it is. If
+    // the keeper had a world of their own before this, the gap between the two
+    // is what happened to it while they were gone.
+    const previouslySeen = fresh ? null : digestMark(world);
     world = serviceWorld;
     serviceMode = true;
     serviceLost = false;
     mapFx.fxInit = false;
-    toast("Connected to the background world. It kept going while you were away.");
+    if (previouslySeen && world.clock.tick > previouslySeen.tick) {
+      const digest = awayDigest(previouslySeen, world, {
+        hours: Math.round((Date.now() - lastSeenAt) / 3.6e5) / 10,
+        because: "service"
+      });
+      if (!digest.empty) {
+        lastDigest = digest;
+        toast(esc(digestLine(digest)));
+      } else {
+        toast("Connected to the background world. It kept going while you were away.");
+      }
+    } else {
+      toast("Connected to the background world. It kept going while you were away.");
+    }
   } else if (fresh) {
     const before = world.clock.day;
     runTicks(world, OPENING_TICKS);
@@ -2686,11 +3400,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     const caught = catchUp();
     if (caught) {
-      setTimeout(() => {
-        toast("While you were away the world kept going — " + caught.ticks + " ticks, " +
+      const line = caught.digest && !caught.digest.empty
+        ? digestLine(caught.digest)
+        : "While you were away the world kept going — " + caught.ticks + " ticks, " +
           (caught.days > 0 ? caught.days + (caught.days === 1 ? " day" : " days") : caught.hours + " hours") +
-          " of it. Check the Chronicle.");
-      }, 900);
+          " of it. Check the Chronicle.";
+      setTimeout(() => toast(esc(line)), 900);
     }
   }
   // Either way the world has moved, so the save has to catch up with it: a
@@ -2722,6 +3437,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       save();
       renderCharter(/** @type {any} */ ($("record-pane")));
       renderRecord();
+      renderWant();
       return;
     }
     const refuse = target?.closest(".refuse-petition");
@@ -2730,6 +3446,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!result.ok) toast(result.reason || "You cannot rule on that.");
       save();
       renderRecord();
+      renderWant();
       return;
     }
     const settle = target?.closest(".resolve-dilemma");
@@ -2739,6 +3456,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!result.ok) toast(result.reason || "You cannot settle that.");
       save();
       renderRecord();
+      renderWant();
       return;
     }
     const whisper = target?.closest(".act-whisper");
@@ -2747,6 +3465,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!result.ok) toast(result.reason || "You cannot act on that.");
       save();
       renderRecord();
+      renderWant();
+      return;
+    }
+
+    const dismissDigest = target?.closest(".digest-dismiss");
+    if (dismissDigest) {
+      lastDigest = null;
+      save();
+      renderRecord();
+      return;
+    }
+
+    const memorialMind = target?.closest(".mem-mind");
+    if (memorialMind) {
+      openSheet(/** @type {any} */ (memorialMind).dataset.mind);
       return;
     }
 
@@ -2761,6 +3494,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-cancel-create").addEventListener("click", closeCreate);
   $("more-feed").addEventListener("click", () => { switchTab("record"); ui.record = "feed"; renderRecord(); });
   $("keeper-strip").addEventListener("click", () => { ui.record = "keeper"; save(); switchTab("record"); });
+  $("hand-card").addEventListener("click", ev => {
+    const btn = /** @type {HTMLElement|null} */ (ev.target)?.closest(".hand-act");
+    const kind = /** @type {HTMLElement|null} */ (btn)?.dataset.act;
+    if (!kind || /** @type {any} */ (btn).disabled) return;
+    tryIntervene(/** @type {"omen"|"blessing"|"apparition"} */ (kind), divineTargetFor(kind));
+  });
+  $("want-card").addEventListener("click", () => {
+    ui.record = "keeper";
+    save();
+    switchTab("record");
+    renderRecord();
+  });
   $("sheet-backdrop").addEventListener("click", closeSheet);
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-toggle").addEventListener("click", () => {
@@ -2781,6 +3526,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("chat-send").addEventListener("click", sendChat);
   $("chat-input").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
   $("btn-save-admin").addEventListener("click", saveAdmin);
+  $("btn-service-check").addEventListener("click", () => { void checkServiceNow(); });
   $("btn-export-world").addEventListener("click", downloadWorldBackup);
   $("btn-import-world").addEventListener("click", () => {
     if (serviceMode) {

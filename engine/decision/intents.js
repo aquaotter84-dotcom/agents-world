@@ -19,6 +19,8 @@ import { regionDistance } from "../model/regions.js";
 import { recall } from "../model/memory.js";
 import { recallingSecretBurden, strongestBurden } from "./burden.js";
 import { activeRitual } from "../systems/rituals.js";
+import { liveOmenForRegion } from "../model/divine.js";
+import { regionName } from "../model/world.js";
 
 /**
  * @typedef {object} Intent
@@ -407,6 +409,13 @@ export function generateIntents(world, agent) {
       if (stage === "vendetta") {
         score += cfg.vendetta.confrontBonus;
         reasons.push(`this is a vendetta with ${rival.name}`);
+      }
+      // The keeper's omen is the one thing in the world that argues with a
+      // grievance from above. A mind standing under a sign has to want it more.
+      const omen = liveOmenForRegion(world.divine, tick, agent.regionId);
+      if (omen) {
+        score -= cfg.divine.omenDeterrence;
+        reasons.push(`there is a sign hanging over ${regionName(world, agent.regionId)}`);
       }
       if (edge.resentment > 25 || stage === "vendetta") add("confront", rivalId, score, reasons, { requiresProximity: false });
     }

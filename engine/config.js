@@ -209,6 +209,204 @@ export const DEFAULT_CONFIG = {
     deathChance: 0.25
   },
 
+  mourning: {
+    /**
+     * Death matters, and so does absence.
+     *
+     * A death calls a gathering; the world has `callDelayTicks` to hear about
+     * it, which is also long enough for the keeper to see it coming on the
+     * board. Attendance is read off the dead's own ties: `attendThreshold` is
+     * how close a mind must have stood to come on their own account, and the
+     * `minMourners` closest come regardless, because a world that lets a
+     * funeral go unattended is not a world anybody would want to keep.
+     *
+     * Grudges inherit. A heir is a real bond — `heirAffinityMin` — and takes
+     * `inheritFactor` of the dead's resentment onto their own edge, where the
+     * feud system picks it up like any other quarrel. Below `inheritMin` the
+     * grievance is too small to survive the person holding it.
+     */
+    enabled: true,
+    callDelayTicks: 8,
+    attendThreshold: 30,
+    minMourners: 2,
+    maxMourners: 6,
+    griefTicks: 48,
+    griefConnection: 6,
+    heirAffinityMin: 30,
+    maxHeirs: 2,
+    /** How many of the dead's quarrels can find a new pair of hands. */
+    maxInherit: 2,
+    inheritFactor: 0.55,
+    inheritMin: 12,
+    inheritFearFactor: 0.3,
+    inheritFamiliarity: 4,
+    /** How long a fresh grave is drawn on the board. */
+    graveWindowTicks: 144
+  },
+
+  divine: {
+    /**
+     * Gods don't chat: how the keeper is present without saying anything.
+     *
+     * Three interventions, each aimed at something the world already has —
+     * a mind, the region it stands in, the work on the wall, a dilemma already
+     * on the table — and each paid for out of the same influence the charter
+     * runs on. The prices are the point: at `charter.influencePerDay` a day
+     * kept pays for one blessing and part of an omen, so a keeper who wants to
+     * appear at a dilemma has to have been saving for it.
+     *
+     * Every window below is a range in ticks (48 ticks = one world day) during
+     * which the intervention still bites. After that it stops, and only the
+     * mark and the record go on.
+     */
+    enabled: true,
+
+    /** The blessing: a light on a mind, or on the work itself. */
+    blessingCost: 5,
+    blessingWindowTicks: 48,
+    /** What it does to a mind the moment it lands. */
+    blessingLift: 14,
+    blessingStanding: 6,
+    blessingMoodLevel: 8,
+    /** While it holds, that mind's — or everyone's — wall work goes this much further. */
+    blessingWorkBonus: 0.35,
+    /** Cooldown per target: a mind already lit cannot be lit again while it holds. */
+
+    /** The omen: a sign over a region, before the feud flashes. */
+    omenCost: 7,
+    omenWindowTicks: 72,
+    /** Awe, the moment it appears: meaning up, mood cooled, and — a real
+     * brake, not a feeling — everyone feuding in that region becomes more
+     * frightened of the person they are feuding with. */
+    omenFear: 6,
+    omenMeaning: 2,
+    omenMoodLevel: -3,
+    /** Resentment between minds in the region cools by this much per tick. */
+    omenCoolPerTick: 0.12,
+    /** How much harder it is to choose a confrontation while standing under it. */
+    omenDeterrence: 30,
+
+    /** The apparition: the keeper stands at a dilemma, and says nothing. */
+    apparitionCost: 12,
+    /** What the parties' mutual resentment loses. */
+    apparitionResentment: -30,
+    apparitionStanding: 2,
+    apparitionMeaning: 6,
+    apparitionMoodLevel: -4,
+
+    /** How long the board keeps drawing a mark after the effect has ended. */
+    markWindowTicks: 48,
+    /** Ticks between two uses of the same intervention, whatever the target. */
+    cooldownTicks: { omen: 24, blessing: 12, apparition: 48 }
+  },
+
+  want: {
+    /**
+     * The keeper's own score: harmony, prosperity, legacy.
+     *
+     * These meters are not a resource — nothing is bought with them. They are
+     * a reading of the world's condition (the `*Base` and `*Per*` numbers
+     * below turn facts the engine already tracks into a 0..100 meter) and a
+     * ledger of what the keeper's acts did to it (`acts`, at the bottom).
+     *
+     * `driftPerTick` is how fast a meter follows the reading: slow enough that
+     * a change is watched rather than blinked through, fast enough that a
+     * keeper who fixes the thing that was broken sees it land the same day.
+     */
+    enabled: true,
+    driftPerTick: 0.35,
+    driftLogIntervalTicks: 24,
+
+    /** A bond is counted when both sides like each other at least this much. */
+    bondThreshold: 45,
+    /** Connection below this counts a mind as alone — the same line turnover uses. */
+    lonelyThreshold: 22,
+
+    harmonyBase: 46,
+    harmonyPerBond: 4.5,
+    harmonyPerRivalry: 5,
+    harmonyPerVendetta: 9,
+    harmonyPerLonely: 4.5,
+    /** A funeral just held is the world standing together at real cost. */
+    harmonyPerGathering: 4,
+    gatheringWindowTicks: 24,
+
+    prosperityBase: 22,
+    prosperityPerWallPoint: 0.3,
+    prosperityPerHand: 2.2,
+    /** A favour repaid or called in is shared work actually landing. */
+    prosperityPerFavour: 2.6,
+    prosperityPerInterference: 2.5,
+    /** Unrepaid debt is prosperity that is stuck in one pocket. */
+    prosperityPerDebtPoint: 0.03,
+    favourWindowTicks: 144,
+    interferenceWindowTicks: 144,
+
+    legacyBase: 12,
+    legacyPerRule: 6,
+    legacyRuleCap: 30,
+    legacyPerRole: 4,
+    legacyRoleCap: 20,
+    /** A role whose holder is gone is a name the world no longer uses. */
+    legacyPerBrokenRole: 3,
+    legacyPerPrecedent: 1.1,
+    legacyPerDay: 0.5,
+    /** A grave is a thing the world remembers, and memory is legacy. */
+    legacyPerGrave: 3,
+    /** A mind that simply left is remembered too, at half a grave's weight. */
+    legacyPerDeparture: 2,
+    legacyForWallRaised: 10,
+
+    /**
+     * The lose condition, made legible.
+     *
+     * If nothing has asked the keeper for anything for `quietAfterTicks`, the
+     * harmony reading is penalised by `quietDecayPerTick` per silent tick, up
+     * to `quietMaxPenalty` — so a world left alone long enough spends all of
+     * the harmony it had. At the floor, with the silence unbroken for
+     * `fallenGraceTicks` more, the world is declared quiet: still alive, still
+     * simulating, but no longer asking, and it stays that way until an ask
+     * arrives.
+     */
+    quietAfterTicks: 144,
+    quietDecayPerTick: 0.6,
+    quietMaxPenalty: 55,
+    quietLogIntervalTicks: 48,
+    fallenGraceTicks: 48,
+
+    /**
+     * What each keeper act does to the keeper's own meters. These are the
+     * visible deltas: the panel shows the movement, with the act that caused it,
+     * every time a ruling, a dilemma, a whisper or the wall lands.
+     *
+     * Refusing is not punished — a keeper who says no has still ruled, and
+     * precedent is legacy. Ignoring a petition is the thing with no upside.
+     */
+    acts: {
+      enact: { legacy: 6, harmony: 3 },
+      refuse: { legacy: 1, harmony: -2 },
+      lapse: { harmony: -1.5 },
+      separate: { harmony: 3 },
+      mediate: { harmony: 5, prosperity: 1 },
+      condemn: { harmony: -1, legacy: 1 },
+      rally: { prosperity: 5, harmony: 2 },
+      shame: { prosperity: 2, harmony: -1 },
+      let_it_ride: { harmony: -1 },
+      whisper: { harmony: -3, legacy: 2 },
+      wall_raised: { prosperity: 12, legacy: 6, harmony: 6 },
+      // Gods don't chat. A blessing is the keeper's gentlest act and moves the
+      // shared work; an omen is a warning that buys quiet; an apparition is the
+      // most expensive thing a keeper can do, and it buys memory, not a ruling.
+      blessing: { prosperity: 3, harmony: 2 },
+      omen: { harmony: 3, legacy: 1 },
+      apparition: { legacy: 4, harmony: 4 },
+      // Not keeper acts, but they move the same meters through the same choke
+      // point, so a death is never invisible in the keeper's ledger either.
+      funeral: { harmony: 2, legacy: 3 },
+      departure: { legacy: 1 }
+    }
+  },
+
   rumour: {
     /**
      * Gossip warps as it spreads. Each retelling has this chance of mutating

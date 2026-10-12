@@ -29,10 +29,13 @@ import { applyEffects } from "./systems/effects.js";
 import { settleNeeds, checkCollapse } from "./systems/needs.js";
 import { settleRelations, settleProximity, hatchSecrets } from "./systems/social.js";
 import { settleTurnover } from "./systems/turnover.js";
+import { settleMourning } from "./systems/mourning.js";
+import { settleDivine } from "./systems/divine.js";
 import { settleRituals } from "./systems/rituals.js";
 import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
 import { settleChat } from "./systems/chat-influence.js";
+import { settleWant, noteAsk } from "./systems/want.js";
 import { logEvent } from "./model/events.js";
 import { phrase, momentLine } from "./decision/prose.js";
 import { agentById, livingAgents, regionName } from "./model/world.js";
@@ -190,9 +193,16 @@ export function step(world) {
   settleProximity(world);
   hatchSecrets(world);
   settleTurnover(world);
+  // A death this tick is buried a little later, and a gathering that has been
+  // called is held here — before the feuds are tracked, so a quarrel that has
+  // just changed hands is part of this tick's world.
+  settleMourning(world);
   settleRituals(world);
   trackFeuds(world);
   settleCharter(world);
+  // Signs the keeper has already set take their bite here, after every system
+  // that could have produced a fresh quarrel this tick.
+  settleDivine(world);
   maybeRaiseDilemma(world);
   // Systems queue ops rather than applying them mid-pass, so that nothing here
   // can mutate an agent halfway through another system's read of it.
@@ -202,7 +212,11 @@ export function step(world) {
   }
   expireMoments(world);
 
-  /* ---- 7. Day boundary ---- */
+  /* ---- 7. The keeper's reading, then the day boundary ---- */
+  // The meters are read last, after every system has had its say, so the
+  // keeper's score for this tick is a fact about the world as it now stands
+  // rather than about the world as it stood when the tick began.
+  settleWant(world);
   maybeChronicle(world, tick);
 
   // Everything logged this tick, oldest first, so a reader sees the tick unfold.
@@ -829,6 +843,7 @@ function maybeRaiseDilemma(world) {
   };
   charter.dilemmas.push(dilemma);
   if (charter.dilemmas.length > 24) charter.dilemmas = charter.dilemmas.slice(-24);
+  noteAsk(world, "a dilemma");
   logEvent(world, {
     kind: "charter",
     agentId: raised.partyIds[0] ?? null,
@@ -959,6 +974,7 @@ function resolveWhisperMoment(world, moment, agent, answer, engineFallback) {
     world.charter.whispers.push(whisper);
     agent.whisper.lastText = words;
     moment.whisperId = whisper.id;
+    noteAsk(world, "a whisper");
   }
 
   const about = aboutId ? agentById(world, aboutId) : null;

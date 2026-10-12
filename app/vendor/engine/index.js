@@ -23,7 +23,13 @@
 /* ---- construction and persistence ---- */
 export { createWorld, SEED_CAST, worldStats, agentById, agentByName, regionById, regionName, livingAgents, agentsIn, regionOccupancy, secretsKnownBy, privateSecretsHeld, weaponisableSecrets, secretsAbout, secretTextFor, secretClaimFor } from "./model/world.js";
 export { createCharter, normalizeCharter, RULE_KINDS, RULE_KIND_LIST, moveInfluence, ruleStrength, isEnacted, influenceWord, precedentFor } from "./model/charter.js";
+export { createWant, normalizeWant, WANT_METERS, WANT_LABELS, meterWord, lastKeeperMovement, wantLog, wantValues, wantVerdict } from "./model/want.js";
+export { createMourning, normalizeMourning, pendingFunerals, recentMemorials, buriedMemorials, funeralFor, memorialFor, FUNERAL_CAP, MEMORIAL_CAP } from "./model/mourning.js";
+export { createDivine, normalizeDivine, INTERVENTION_KINDS, INTERVENTION_CAP, liveInterventions, markedInterventions, interventionById, liveOmenForRegion, liveBlessingForAgent, liveBlessingForWork, recordIntervention } from "./model/divine.js";
 export { ruleOnPetition, resolveDilemma, actOnWhisper, settleCharter, describeRule } from "./systems/charter.js";
+export { settleWant, wantReading, shiftWant, keeperAct, noteAsk, quietState, wantSummary } from "./systems/want.js";
+export { settleMourning, callFuneral, mournDeparture, deedsOf } from "./systems/mourning.js";
+export { settleDivine, performIntervention, canIntervene, interventionOptions, interventionOption, recentInterventions, liveSigns, interventionFor, resolveTarget, INTERVENTION_INFO } from "./systems/divine.js";
 export { APPROACH_METHODS, availableMethods, validateApproach, resolveApproach, proposalEligible } from "./decision/proposals.js";
 export { petitionableRules, petitionEligible, validatePetition, whisperable, whisperEligible, openDilemma, dilemmaChoices } from "./decision/petitions.js";
 export { serializeWorld, deserializeWorld, forkWorld } from "./snapshot.js";
