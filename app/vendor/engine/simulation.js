@@ -29,6 +29,7 @@ import { settleTurnover } from "./systems/turnover.js";
 import { settleRituals } from "./systems/rituals.js";
 import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
+import { settleChat } from "./systems/chat-influence.js";
 import { logEvent } from "./model/events.js";
 import { phrase, momentLine } from "./decision/prose.js";
 import { agentById, livingAgents } from "./model/world.js";
@@ -69,6 +70,7 @@ export function step(world) {
     settleNeeds(world, agent);
     settleRelations(world, agent);
     settleMemory(world, agent);
+    settleChat(world, agent);
   }
 
   /* ---- 2. Collapse ---- */

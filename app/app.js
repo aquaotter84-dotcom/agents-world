@@ -25,6 +25,7 @@ import {
   REGIONS, GOAL_IDEAS, BACKSTORIES,
   describeRelation, standingWord,
   KEEPER_ROLES, roleById,
+  applyChatInfluence,
   socialTemperature, currentFactions,
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
   levelProgress, pressingNeed
@@ -1515,6 +1516,8 @@ async function sendChat() {
   $("chat-log").scrollTop = $("chat-log").scrollHeight;
   try {
     const reply = await mindReplies(a, hist, chatRoles[a.id]);
+    // The chat happened: let Jeremy's words change the world.
+    applyChatInfluence(world, a, text, reply, chatRoles[a.id]);
     hist.push({ role: "assistant", content: reply, ts: Date.now() });
     if (hist.length > 100) hist.splice(0, hist.length - 100);
   } catch (err) {

@@ -60,6 +60,11 @@ import { clamp } from "../config.js";
  * @property {string} mood       Ambient mood word; see `moodWord`.
  * @property {number} moodUntil  Tick until which a transient mood holds.
  * @property {string} [moodReason]
+ * @property {number} moodLevel   0..100 chat-driven mood, 50 neutral. Jeremy's
+ *                               words shift it; it decays toward 50 each tick
+ *                               and tips `moodWord` at the extremes.
+ * @property {{text: string, tick: number}} [suggestedGoal]  A directive Jeremy
+ *                               gave in chat, awaiting possible adoption.
  * @property {number} xp
  * @property {number} level
  * @property {Goal} goal
@@ -237,6 +242,11 @@ export function moodWord(agent, tick) {
   if (n.connection <= 15) return "lonely";
   if (n.energy <= 35) return "weary";
   if (n.connection <= 35) return "restless";
+  // Chat-driven mood tips the word at the extremes, but a real transient mood
+  // (triumph, a named state) still wins, and depletion words above win first.
+  const moodLevel = agent.moodLevel ?? 50;
+  if ((!agent.mood || agent.mood === "steady") && moodLevel >= 75) return "bright";
+  if ((!agent.mood || agent.mood === "steady") && moodLevel <= 25) return "low";
   if (agent.mood && agent.mood !== "triumphant") return agent.mood;
   if (n.energy > 65 && n.meaning > 60 && n.connection > 55) return "content";
   return "steady";
@@ -361,6 +371,7 @@ export function createAgent(spec, rng, tick, memory, levelDivisor = 45) {
     mood: "steady",
     moodUntil: 0,
     moodReason: undefined,
+    moodLevel: 50,
     xp: 0,
     level: levelFromXp(0, divisor),
     goal: {

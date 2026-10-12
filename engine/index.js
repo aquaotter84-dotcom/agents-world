@@ -76,6 +76,7 @@ export { mutateClaim, tellWithMutation } from "./systems/rumour.js";
 export { activeRitual, settleRituals } from "./systems/rituals.js";
 export { trackFeuds } from "./systems/vendetta.js";
 export { KEEPER_ROLES, roleById } from "./chat.js";
+export { applyChatInfluence, scoreSentiment, sentimentKind, detectDirective, settleChat } from "./systems/chat-influence.js";
 export { preoccupations, memoryLoad } from "./systems/memory.js";
 
 /* ---- configuration and content ---- */
