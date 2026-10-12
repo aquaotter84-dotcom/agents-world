@@ -209,6 +209,96 @@ export const DEFAULT_CONFIG = {
     deathChance: 0.25
   },
 
+  want: {
+    /**
+     * The keeper's own score: harmony, prosperity, legacy.
+     *
+     * These meters are not a resource — nothing is bought with them. They are
+     * a reading of the world's condition (the `*Base` and `*Per*` numbers
+     * below turn facts the engine already tracks into a 0..100 meter) and a
+     * ledger of what the keeper's acts did to it (`acts`, at the bottom).
+     *
+     * `driftPerTick` is how fast a meter follows the reading: slow enough that
+     * a change is watched rather than blinked through, fast enough that a
+     * keeper who fixes the thing that was broken sees it land the same day.
+     */
+    enabled: true,
+    driftPerTick: 0.35,
+    driftLogIntervalTicks: 24,
+
+    /** A bond is counted when both sides like each other at least this much. */
+    bondThreshold: 45,
+    /** Connection below this counts a mind as alone — the same line turnover uses. */
+    lonelyThreshold: 22,
+
+    harmonyBase: 46,
+    harmonyPerBond: 4.5,
+    harmonyPerRivalry: 5,
+    harmonyPerVendetta: 9,
+    harmonyPerLonely: 4.5,
+
+    prosperityBase: 22,
+    prosperityPerWallPoint: 0.3,
+    prosperityPerHand: 2.2,
+    /** A favour repaid or called in is shared work actually landing. */
+    prosperityPerFavour: 2.6,
+    prosperityPerInterference: 2.5,
+    /** Unrepaid debt is prosperity that is stuck in one pocket. */
+    prosperityPerDebtPoint: 0.03,
+    favourWindowTicks: 144,
+    interferenceWindowTicks: 144,
+
+    legacyBase: 12,
+    legacyPerRule: 6,
+    legacyRuleCap: 30,
+    legacyPerRole: 4,
+    legacyRoleCap: 20,
+    /** A role whose holder is gone is a name the world no longer uses. */
+    legacyPerBrokenRole: 3,
+    legacyPerPrecedent: 1.1,
+    legacyPerDay: 0.5,
+    legacyForWallRaised: 10,
+
+    /**
+     * The lose condition, made legible.
+     *
+     * If nothing has asked the keeper for anything for `quietAfterTicks`, the
+     * harmony reading is penalised by `quietDecayPerTick` per silent tick, up
+     * to `quietMaxPenalty` — so a world left alone long enough spends all of
+     * the harmony it had. At the floor, with the silence unbroken for
+     * `fallenGraceTicks` more, the world is declared quiet: still alive, still
+     * simulating, but no longer asking, and it stays that way until an ask
+     * arrives.
+     */
+    quietAfterTicks: 144,
+    quietDecayPerTick: 0.6,
+    quietMaxPenalty: 55,
+    quietLogIntervalTicks: 48,
+    fallenGraceTicks: 48,
+
+    /**
+     * What each keeper act does to the keeper's own meters. These are the
+     * visible deltas: the panel shows the movement, with the act that caused it,
+     * every time a ruling, a dilemma, a whisper or the wall lands.
+     *
+     * Refusing is not punished — a keeper who says no has still ruled, and
+     * precedent is legacy. Ignoring a petition is the thing with no upside.
+     */
+    acts: {
+      enact: { legacy: 6, harmony: 3 },
+      refuse: { legacy: 1, harmony: -2 },
+      lapse: { harmony: -1.5 },
+      separate: { harmony: 3 },
+      mediate: { harmony: 5, prosperity: 1 },
+      condemn: { harmony: -1, legacy: 1 },
+      rally: { prosperity: 5, harmony: 2 },
+      shame: { prosperity: 2, harmony: -1 },
+      let_it_ride: { harmony: -1 },
+      whisper: { harmony: -3, legacy: 2 },
+      wall_raised: { prosperity: 12, legacy: 6, harmony: 6 }
+    }
+  },
+
   rumour: {
     /**
      * Gossip warps as it spreads. Each retelling has this chance of mutating

@@ -33,6 +33,7 @@ import { settleRituals } from "./systems/rituals.js";
 import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
 import { settleChat } from "./systems/chat-influence.js";
+import { settleWant, noteAsk } from "./systems/want.js";
 import { logEvent } from "./model/events.js";
 import { phrase, momentLine } from "./decision/prose.js";
 import { agentById, livingAgents, regionName } from "./model/world.js";
@@ -202,7 +203,11 @@ export function step(world) {
   }
   expireMoments(world);
 
-  /* ---- 7. Day boundary ---- */
+  /* ---- 7. The keeper's reading, then the day boundary ---- */
+  // The meters are read last, after every system has had its say, so the
+  // keeper's score for this tick is a fact about the world as it now stands
+  // rather than about the world as it stood when the tick began.
+  settleWant(world);
   maybeChronicle(world, tick);
 
   // Everything logged this tick, oldest first, so a reader sees the tick unfold.
@@ -829,6 +834,7 @@ function maybeRaiseDilemma(world) {
   };
   charter.dilemmas.push(dilemma);
   if (charter.dilemmas.length > 24) charter.dilemmas = charter.dilemmas.slice(-24);
+  noteAsk(world, "a dilemma");
   logEvent(world, {
     kind: "charter",
     agentId: raised.partyIds[0] ?? null,
@@ -959,6 +965,7 @@ function resolveWhisperMoment(world, moment, agent, answer, engineFallback) {
     world.charter.whispers.push(whisper);
     agent.whisper.lastText = words;
     moment.whisperId = whisper.id;
+    noteAsk(world, "a whisper");
   }
 
   const about = aboutId ? agentById(world, aboutId) : null;

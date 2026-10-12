@@ -13,7 +13,7 @@
  * rather than a matter of care.
  */
 
-import { feudStage } from "./vendor/engine/index.js";
+import { feudStage, wantSummary, WANT_LABELS, meterWord } from "./vendor/engine/index.js";
 
 /**
  * @typedef {import("./vendor/engine/model/world.js").World} World
@@ -162,6 +162,40 @@ export function projectPalette(world) {
 }
 
 /**
+ * The keeper's own board: three rings, one per meter.
+ *
+ * Harmony, prosperity and legacy are the keeper's score, and a score that only
+ * lives in a panel is not on the board. This is the data the canvas needs to
+ * draw them as a ring at the corner of the map — value, weight, colour, the
+ * last act that moved each meter, and whether the world is going quiet under
+ * the keeper's feet.
+ *
+ * @param {World} world
+ * @returns {{meters: {key: string, label: string, value: number, word: string, color: string, delta: number, cause: string|null, drift: number}[], fallen: boolean, draining: boolean, quietDays: number, quietSince: number, asks: number, ignored: number}}
+ */
+export function keeperRing(world) {
+  const summary = wantSummary(world);
+  return {
+    meters: summary.meters.map(meter => ({
+      key: meter.key,
+      label: WANT_LABELS[meter.key].name,
+      value: meter.value,
+      word: meter.word || meterWord(meter.key, meter.value),
+      color: WANT_LABELS[meter.key].color,
+      delta: meter.delta,
+      cause: meter.cause,
+      drift: meter.drift
+    })),
+    fallen: summary.fallen,
+    draining: summary.quiet.draining,
+    quietDays: Math.floor(summary.quiet.since / 48),
+    quietSince: summary.quiet.since,
+    asks: summary.asks,
+    ignored: summary.ignored
+  };
+}
+
+/**
  * A one-line summary of the board's state, for tests and for accessibility.
  * @param {World} world
  */
@@ -170,11 +204,14 @@ export function describeBoard(world) {
   const counts = { petition: 0, whisper: 0, dilemma: 0 };
   for (const s of sigils) counts[s.kind] += 1;
   const palette = projectPalette(world);
+  const ring = keeperRing(world);
+  const want = ring.meters.map(m => `${m.label.toLowerCase()} ${Math.round(m.value)} (${m.word})`).join(", ");
   return [
     `${counts.petition} petition${counts.petition === 1 ? "" : "s"} waiting`,
     `${counts.dilemma} dilemma${counts.dilemma === 1 ? "" : "s"} waiting`,
     `${counts.whisper} whisper${counts.whisper === 1 ? "" : "s"} unheard`,
     `${feudArcs(world).length} feud arc${feudArcs(world).length === 1 ? "" : "s"}`,
-    `the wall at ${Math.round(palette.progress)}%${palette.complete ? " and standing" : ""}`
+    `the wall at ${Math.round(palette.progress)}%${palette.complete ? " and standing" : ""}`,
+    `the keeper's want: ${want}${ring.fallen ? " (the world has gone quiet)" : ""}`
   ].join(" · ");
 }

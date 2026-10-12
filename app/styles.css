@@ -468,7 +468,38 @@ textarea { resize: vertical; min-height: 56px; }
 .keeper-strip .ks-rank { font-weight: 700; letter-spacing: .02em; color: #f3d9a4; }
 .keeper-strip .ks-xp, .keeper-strip .ks-next { font-size: 12px; color: #9a9aa8; }
 .ks-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+
 .ks-bar > span { display: block; height: 100%; background: linear-gradient(90deg, #7a5a20, #f3d9a4); transition: width .4s; }
+
+/* ---------- the keeper's want: harmony, prosperity, legacy ---------- */
+.want-card { cursor: pointer; display: grid; gap: 8px; padding: 10px 14px; }
+.want-card .want-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.want-card .eyebrow { margin: 0; }
+.want-verdict { font-size: 12px; color: var(--muted); text-align: right; }
+.want-verdict.high { color: var(--green); }
+.want-verdict.draining { color: var(--gold); }
+.want-verdict.fallen, .want-verdict.bad { color: var(--danger); }
+.want-meters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.want-meter { display: grid; gap: 4px; min-width: 0; }
+.wm-top { display: flex; align-items: baseline; gap: 5px; }
+.wm-name { font-size: 10px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); }
+.wm-value { margin-left: auto; font-size: 15px; color: #f5efe2; }
+.wm-delta { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 5px; }
+.wm-delta.up { color: #0d0d12; background: var(--green); }
+.wm-delta.down { color: #0d0d12; background: var(--danger); }
+.wm-bar { height: 5px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+.wm-bar > span { display: block; height: 100%; border-radius: 3px; transition: width .4s; }
+.wm-note { font-size: 10px; line-height: 1.3; color: var(--muted); }
+.want-quiet { margin: 0; font-size: 12px; line-height: 1.4; color: var(--gold); }
+.want-quiet.fallen { color: var(--danger); font-weight: 700; }
+.want-foot { margin: 0; font-size: 11px; color: var(--muted); }
+.want-panel .want-meters { margin-top: 8px; }
+.want-ledger { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
+.wl-row { display: grid; grid-template-columns: 54px 96px 1fr; gap: 6px; font-size: 11px; align-items: baseline; }
+.wl-day { color: var(--muted); }
+.wl-bits { font-weight: 700; color: var(--green); }
+.wl-bits.drift { color: var(--muted); font-weight: 400; }
+.wl-cause { color: var(--muted); }
 .keeper-panel { display: grid; gap: 8px; }
 .keeper-panel .kp-rank { margin: 0; font-family: Georgia, serif; color: #f3d9a4; }
 .keeper-panel .kp-h { margin: 8px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aa8; }

@@ -25,6 +25,7 @@ import { agentById, livingAgents, regionName } from "../model/world.js";
 import { adjustEdge } from "../model/relationships.js";
 import { remember } from "../model/memory.js";
 import { moveInfluence, ruleStrength, isEnacted, RULE_KINDS, precedentFor } from "../model/charter.js";
+import { keeperAct, noteAsk } from "./want.js";
 
 /**
  * @typedef {import("../model/world.js").World} World
@@ -237,6 +238,10 @@ function lapsePetitions(world) {
     if (petition.status !== "open") continue;
     if (tick - petition.tick < cfg.petitionLapseTicks) continue;
     petition.status = "lapsed";
+    // An unanswered ask is the one kind of exchange with no upside: the world
+    // asked, got nothing, and learned that asking changes nothing.
+    world.want.ignored = (world.want.ignored || 0) + 1;
+    keeperAct(world, "you let a petition lapse unanswered", world.config.want.acts.lapse);
     const agent = agentById(world, petition.agentId);
     if (agent) {
       remember(agent.memory, {
@@ -309,6 +314,7 @@ export function recordPetition(world, agent, check, text) {
     cost: check.cost
   };
   charter.petitions.push(petition);
+  noteAsk(world, "a petition");
   return petition;
 }
 
@@ -395,6 +401,7 @@ export function ruleOnPetition(world, petitionId, decision, note = "") {
     moveInfluence(charter, cfg.influencePerRuling);
 
     recordPrecedent(world, petition, "enacted", rule.id);
+    keeperAct(world, `you enacted ${describeRule(petition.ruleKind)}`, world.config.want.acts.enact);
     logEvent(world, {
       kind: "charter",
       agentId: petition.agentId,
@@ -418,6 +425,7 @@ export function ruleOnPetition(world, petitionId, decision, note = "") {
     charter.rulingsMade += 1;
     moveInfluence(charter, cfg.influencePerRuling);
     recordPrecedent(world, petition, "refused");
+    keeperAct(world, `you refused the petition for ${describeRule(petition.ruleKind)}`, world.config.want.acts.refuse);
     logEvent(world, {
       kind: "charter",
       agentId: petition.agentId,
@@ -551,6 +559,10 @@ export function resolveDilemma(world, dilemmaId, choiceId) {
       break;
   }
 
+  const acts = /** @type {Record<string, Record<string, number>>} */ (world.config.want.acts);
+  const movement = acts[choiceId];
+  if (movement) keeperAct(world, `you chose to ${String(choiceId).replace(/_/g, " ")}`, movement);
+
   logEvent(world, {
     kind: "charter",
     agentId: aId ?? null,
@@ -576,6 +588,7 @@ export function actOnWhisper(world, whisperId) {
   if (charter.influence < cost) return { ok: false, reason: `Acting on it costs ${cost} influence.` };
   moveInfluence(charter, -cost);
   whisper.actedOn = true;
+  keeperAct(world, "you acted on something told to you in private", world.config.want.acts.whisper);
 
   const teller = agentById(world, whisper.agentId);
   const about = whisper.aboutId ? agentById(world, whisper.aboutId) : null;
@@ -618,6 +631,9 @@ export function recordWallRaised(world, contributorIds) {
   charter.wallRaised = true;
   charter.wallRaisedTick = world.clock.tick;
   moveInfluence(charter, 25);
+  // The shared win is the largest single movement the keeper's meters ever
+  // take, because it is the one thing every mind did together.
+  keeperAct(world, "the North Wall stands", world.config.want.acts.wall_raised);
 
   /** @type {import("../model/charter.js").Precedent} */
   const precedent = {

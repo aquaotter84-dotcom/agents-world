@@ -220,6 +220,65 @@ test("a tap still opens a dossier, and the radial closes when anything else take
   } finally { restore(); }
 });
 
+test("the keeper's want is on the board, not buried in a tab", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    const card = $(doc, "#want-card");
+    assert.ok(card, "the world screen carries the keeper's own score");
+    const meters = $$(doc, "#want-card .want-meter");
+    assert.deepEqual(meters.map(m => /** @type {any} */ (m).dataset.meter), ["harmony", "prosperity", "legacy"]);
+    for (const meter of meters) {
+      assert.match(/** @type {HTMLElement} */ (meter).textContent || "", /\d/, "each meter shows its number");
+      assert.ok(meter.querySelector(".wm-bar"), "and its bar");
+    }
+    assert.match(text(doc, "want-card"), /ask/, "and it says whether the world is asking for anything");
+
+    // The board answers the same question: the ring is the card in another
+    // language, and describeBoard is the same reading as a sentence.
+    /** @type {HTMLElement} */ (card).click();
+    assert.match(text(doc, "record-pane"), /What has moved them/, "the ledger is one tap from the board");
+    assert.equal($$(doc, "#record-pane .want-panel .want-meter").length, 3);
+  } finally { restore(); }
+});
+
+test("tapping the keeper's crown opens their standing, wherever else the board is busy", async () => {
+  const { window, document: doc, restore } = await bootApp();
+  try {
+    const cv = $(doc, "#world-canvas");
+    const Mouse = window.MouseEvent;
+    // In the stubbed 50x50 board the crown sits at (6, 42) — the map's top-right
+    // corner — and it reads before any orb, sigil or thread does.
+    cv.dispatchEvent(new Mouse("mousedown", { clientX: 6, clientY: 42, bubbles: true }));
+    cv.dispatchEvent(new Mouse("mouseup", { clientX: 6, clientY: 42, bubbles: true }));
+    assert.match(text(doc, "record-pane"), /The keeper/, "the crown opens the keeper's record");
+  } finally { restore(); }
+});
+
+test("a ruling moves the keeper's meters visibly, with the delta shown", async () => {
+  const saved = await storedWorldWithCharter();
+  const { document: doc, restore } = await bootApp({ savedState: saved });
+  try {
+    // Nothing has moved the meters yet, so no badge and no cause are shown.
+    assert.equal($$(doc, "#want-card .wm-delta").length, 0, "a fresh ledger shows no deltas");
+
+    const tabs = $$(doc, "#record-tabs .rtab");
+    tabs.find(t => t.dataset.view === "charter").click();
+    /** @type {HTMLElement} */ ($(doc, "#record-pane .enact-petition")).click();
+
+    // The world-screen card now shows the movement on the meters it moved, and
+    // names the act that moved them.
+    const badges = $$(doc, "#want-card .wm-delta.up");
+    assert.ok(badges.length >= 2, "enacting moves both legacy and harmony, and both show it");
+    assert.match(text(doc, "want-card"), /you enacted/, "the card names the act that moved it");
+
+    // The keeper's record holds the same movement in its ledger.
+    tabs.find(t => t.dataset.view === "keeper").click();
+    const pane = text(doc, "record-pane");
+    assert.match(pane, /you enacted/, "the ledger keeps the act");
+    assert.match(pane, /Day 1/, "with the day it happened");
+  } finally { restore(); }
+});
+
 test("the board reports what the atlas shows, from the world alone", async () => {
   // The canvas only positions and paints; everything the map *decides* to show
   // is pure, and that is the part worth testing.

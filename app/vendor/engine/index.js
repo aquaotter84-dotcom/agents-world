@@ -23,7 +23,9 @@
 /* ---- construction and persistence ---- */
 export { createWorld, SEED_CAST, worldStats, agentById, agentByName, regionById, regionName, livingAgents, agentsIn, regionOccupancy, secretsKnownBy, privateSecretsHeld, weaponisableSecrets, secretsAbout, secretTextFor, secretClaimFor } from "./model/world.js";
 export { createCharter, normalizeCharter, RULE_KINDS, RULE_KIND_LIST, moveInfluence, ruleStrength, isEnacted, influenceWord, precedentFor } from "./model/charter.js";
+export { createWant, normalizeWant, WANT_METERS, WANT_LABELS, meterWord, lastKeeperMovement, wantLog, wantValues, wantVerdict } from "./model/want.js";
 export { ruleOnPetition, resolveDilemma, actOnWhisper, settleCharter, describeRule } from "./systems/charter.js";
+export { settleWant, wantReading, shiftWant, keeperAct, noteAsk, quietState, wantSummary } from "./systems/want.js";
 export { APPROACH_METHODS, availableMethods, validateApproach, resolveApproach, proposalEligible } from "./decision/proposals.js";
 export { petitionableRules, petitionEligible, validatePetition, whisperable, whisperEligible, openDilemma, dilemmaChoices } from "./decision/petitions.js";
 export { serializeWorld, deserializeWorld, forkWorld } from "./snapshot.js";

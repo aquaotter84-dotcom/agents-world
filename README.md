@@ -22,6 +22,7 @@ A BluesMinds key changes the *voice*, not the world: with one, a language model 
 - **A map that shows the social graph.** Alliances as warm bonds, grudges as frayed red lines, a mood ring around every orb, region washes that brighten with occupancy, and the day's clock in the corner. Tap a mind and its ties light up.
 - **A named world.** Derived from the seed, so it never changes under you.
 - **Admin speed presets** (Chill / Normal / Brisk / Frantic), plus One tick, A day and A week buttons for fast-forwarding a world.
+- **The keeper's want.** Harmony, prosperity and legacy: three meters that are the keeper's own score, read off the world's real condition (mutual bonds, feud stages, lonely minds, wall progress, favours repaid, laws and roles still standing, the weight of the chronicle) and moved by every act the keeper takes. Each movement is written into a ledger with its cause, so a meter that is falling always has a sentence next to it saying why. The meters sit on the World screen, ring the top-right corner of the map as three arcs under a crown — tap the crown for the ledger — and carry the one lose condition: a world that stops asking for anything (no petitions, no whispers, no dilemmas) drains harmony, and a quiet world is a dying world.
 
 ### Two simulation fixes that were making the world mushier than it looked
 

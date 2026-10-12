@@ -30,7 +30,8 @@ import {
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
   levelProgress, pressingNeed,
   ruleOnPetition, resolveDilemma, actOnWhisper, describeRule, influenceWord,
-  RULE_KINDS, precedentFor, feudStage
+  RULE_KINDS, precedentFor, feudStage,
+  wantSummary, wantLog, WANT_LABELS, wantVerdict
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -40,7 +41,7 @@ import { migrateV1Save } from "./migrate.js";
 import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
-import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette } from "./board.js";
+import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing } from "./board.js";
 
 const STORE_KEY = "agentsworld.v2";
 /**
@@ -631,6 +632,95 @@ function renderKeeperStrip() {
       ? esc(k.next.remaining + " XP to " + k.next.title) + " · tap for the record"
       : "The highest rank. Tap for the record.") + "</div>";
 }
+/**
+ * One meter of the keeper's want, as a bar, a number and the act that last
+ * moved it. Shared by the world screen and the keeper record so the two can
+ * never tell different stories about the same number.
+ * @param {{key: string, value: number, word: string, delta: number, cause: string|null, by: string|null, tick: number, drift: number}} meter
+ */
+function wantMeterHtml(meter) {
+  const label = WANT_LABELS[meter.key];
+  const pct = Math.max(0, Math.min(100, meter.value));
+  const moved = Math.abs(meter.delta) >= 0.5;
+  const badge = moved
+    ? '<span class="wm-delta ' + (meter.delta > 0 ? "up" : "down") + '">' +
+      (meter.delta > 0 ? "+" : "\u2212") + Math.abs(Math.round(meter.delta * 10) / 10) + "</span>"
+    : "";
+  const because = meter.cause
+    ? esc(meter.cause) + (meter.tick >= 0 ? " \u00b7 Day " + dayOfTick(meter.tick) : "")
+    : "nothing you have done has moved it yet";
+  const trend = meter.drift <= -0.5 ? "sinking" : meter.drift >= 0.5 ? "rising" : meter.word;
+  return '<div class="want-meter" data-meter="' + esc(meter.key) + '">' +
+    '<div class="wm-top"><span class="wm-name">' + esc(label.name) + "</span>" + badge +
+    '<b class="wm-value">' + Math.round(meter.value) + "</b></div>" +
+    '<div class="wm-bar"><span style="width:' + pct.toFixed(1) + "%;background:" + esc(label.color) + '"></span></div>' +
+    '<div class="wm-note">' + esc(trend) + " \u00b7 " + because + "</div>" +
+    "</div>";
+}
+
+/**
+ * The keeper's own standing, on the world screen. Harmony, prosperity and
+ * legacy, impossible to miss, each with the act that last moved it — plus the
+ * one warning that matters: a world that has stopped asking for anything.
+ */
+function renderWant() {
+  const el = $("want-card");
+  if (!el) return;
+  const summary = wantSummary(world);
+  const verdict = wantVerdict(world.want, world.config.want);
+  const quietDays = Math.floor(summary.quiet.since / 48);
+  let note = "";
+  if (summary.fallen) {
+    note = '<p class="want-quiet fallen">The world has gone quiet. Nothing asks you for anything any more \u2014 ' +
+      "it will take an ask to bring it back.</p>";
+  } else if (summary.quiet.draining) {
+    note = '<p class="want-quiet">Nobody has asked you for anything in ' + quietDays + " day" +
+      (quietDays === 1 ? "" : "s") + " \u2014 harmony is draining. A petition, a whisper or a dilemma would stop it.</p>";
+  }
+  el.innerHTML =
+    '<div class="want-head"><p class="eyebrow">What you are keeping</p>' +
+    '<span class="want-verdict ' + esc(verdict.tone) + '">' + esc(verdict.line) + "</span></div>" +
+    '<div class="want-meters">' + summary.meters.map(wantMeterHtml).join("") + "</div>" +
+    note +
+    '<p class="want-foot">' + summary.asks + " ask" + (summary.asks === 1 ? "" : "s") + " heard" +
+    (summary.ignored ? " \u00b7 " + summary.ignored + " let go unanswered" : "") +
+    " \u00b7 tap for the ledger</p>";
+}
+
+/**
+ * The keeper's want, with its ledger: every movement of every meter and the
+ * cause that moved it, newest first. This is the panel that answers "why is
+ * harmony falling" without a guess.
+ */
+function wantPanelHtml() {
+  const summary = wantSummary(world);
+  const verdict = wantVerdict(world.want, world.config.want);
+  const ledger = wantLog(world.want, 7).map(entry => {
+    const bits = Object.entries(entry.deltas).map(([meter, delta]) =>
+      (delta > 0 ? "+" : "\u2212") + Math.abs(Math.round(delta * 10) / 10) + " " + esc(meter));
+    return '<li class="wl-row"><span class="wl-day">Day ' + dayOfTick(entry.tick) + "</span>" +
+      '<span class="wl-bits ' + (entry.by === "drift" ? "drift" : "act") + '">' + bits.join(", ") + "</span>" +
+      '<span class="wl-cause">' + (entry.by === "drift" ? "the world's own condition" : esc(entry.cause)) + "</span></li>";
+  }).join("");
+  const lines = summary.meters.map(wantMeterHtml).join("");
+  return '<div class="card want-panel">' +
+    '<p class="eyebrow">The keeper\u2019s want</p>' +
+    '<p class="want-verdict ' + esc(verdict.tone) + '">' + esc(verdict.line) + "</p>" +
+    '<div class="want-meters">' + lines + "</div>" +
+    (summary.quiet.draining
+      ? '<p class="want-quiet' + (summary.fallen ? " fallen" : "") + '">' +
+        (summary.fallen
+          ? "The world is quiet. It has been " + summary.quiet.since + " ticks since anything asked you for anything."
+          : "Quiet for " + summary.quiet.since + " ticks. Harmony is draining a little every tick until the world asks again.") +
+        "</p>"
+      : "") +
+    '<h4 class="kp-h">What has moved them</h4>' +
+    (ledger ? '<ul class="want-ledger">' + ledger + "</ul>" : '<p class="note">Nothing has moved yet. Act, and the ledger fills.</p>') +
+    '<p class="note">' + summary.asks + " asks heard \u00b7 " + summary.ignored + " let go \u00b7 " +
+    "every meter is read off the world itself, so the numbers cannot disagree with what actually happened.</p>" +
+    "</div>";
+}
+
 function keeperPanelHtml() {
   const k = keeperSummary();
   const pct = Math.round(k.progress * 100);
@@ -642,7 +732,7 @@ function keeperPanelHtml() {
     '<div class="ach-title">' + (a.unlocked ? "✓ " : "") + esc(a.title) + "</div>" +
     '<div class="ach-desc">' + esc(a.desc) + "</div></div>").join("");
   const t = k.tallies;
-  return '<div class="card keeper-panel">' +
+  return wantPanelHtml() + '<div class="card keeper-panel">' +
     '<p class="eyebrow">The keeper</p>' +
     '<h3 class="kp-rank">' + esc(k.rank) + "</h3>" +
     '<div class="ks-bar"><span style="width:' + pct + '%"></span></div>' +
@@ -1723,6 +1813,76 @@ function drawConstellations(g, t) {
   }
 }
 
+/**
+ * Where the keeper's crown sits, and how far a tap reaches. This is layout
+ * rather than paint: it is computed from the board's size so the hit test works
+ * from the first moment the board exists, not only after a frame has been
+ * drawn.
+ */
+function keeperRingAt() {
+  const w = Math.max(50, mapFx.w || 0);
+  return { x: w - 44, y: 42, r: 30 };
+}
+
+/**
+ * The keeper's own standing, drawn where it cannot be missed: three concentric
+ * arcs in the board's top-right corner, one per meter — harmony outermost,
+ * legacy closest to the crown — each filling clockwise from the top like a
+ * clock face. The hollow part of a ring is as much a message as the filled
+ * part: a meter down to a sliver is visible from across the room without
+ * opening anything.
+ *
+ * This is the keeper's one mark on the board that belongs to no mind. Tapping
+ * it opens their record; when the world is going quiet the whole puck wears a
+ * slow red pulse, so the lose condition is legible before the words say so.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawKeeperRing(g, t) {
+  const ring = keeperRing(world);
+  const { x: cx, y: cy, r } = keeperRingAt();
+  const START = -Math.PI / 2;
+  const SWEEP = Math.PI * 1.5;
+  g.save();
+  // A dark puck first, so the arcs read over any terrain and the corner always
+  // looks like a control rather than weather.
+  const draining = ring.draining || ring.fallen;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 0.0026);
+  g.fillStyle = "rgba(13,13,18,0.62)";
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = draining
+    ? "rgba(248,113,113," + (0.25 + 0.45 * pulse).toFixed(2) + ")"
+    : "rgba(245,225,184,0.30)";
+  g.lineWidth = 1.2;
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.stroke();
+  // Three arcs, outermost first, each a quarter-turn apart in radius.
+  ring.meters.forEach((meter, i) => {
+    const rr = r - 4 - i * 6;
+    g.lineCap = "round";
+    g.lineWidth = 3.6;
+    g.strokeStyle = "rgba(255,255,255,0.13)";
+    g.beginPath(); g.arc(cx, cy, rr, START, START + SWEEP); g.stroke();
+    const frac = Math.max(0, Math.min(1, meter.value / 100));
+    if (frac > 0.005) {
+      g.strokeStyle = hexA(meter.color, ring.fallen ? 0.55 : 0.95);
+      g.beginPath(); g.arc(cx, cy, rr, START, START + SWEEP * frac); g.stroke();
+    }
+  });
+  // The crown at the centre: small, always present, never a number.
+  g.fillStyle = ring.fallen ? "rgba(180,130,130,0.85)" : "rgba(251,191,36,0.92)";
+  g.beginPath();
+  g.moveTo(cx - 7, cy + 3);
+  g.lineTo(cx - 7, cy - 2.5);
+  g.lineTo(cx - 3.5, cy + 0.5);
+  g.lineTo(cx, cy - 4.5);
+  g.lineTo(cx + 3.5, cy + 0.5);
+  g.lineTo(cx + 7, cy - 2.5);
+  g.lineTo(cx + 7, cy + 3);
+  g.closePath();
+  g.fill();
+  g.restore();
+}
+
 function drawMapFrame(t) {
   const fx = mapFx;
   if (!fx.ctx || !world) return;
@@ -1762,6 +1922,7 @@ function drawMapFrame(t) {
   }
   // what is waiting on the keeper, drawn last so it is never buried
   drawBoardSigils(g, t);
+  drawKeeperRing(g, t);
   // ripples
   fx.ripples = fx.ripples.filter(rp => t - rp.t0 < 900);
   for (const rp of fx.ripples) {
@@ -1852,6 +2013,12 @@ function initCanvas() {
 
   /** What is under a point on the board: a sigil, a thread, or a mind. */
   const hitTest = (x, y) => {
+    // The keeper's own crown reads first: it is the one mark on the board that
+    // belongs to no mind, so it must never be buried under one passing by.
+    {
+      const crown = keeperRingAt();
+      if (Math.hypot(crown.x - x, crown.y - y) <= crown.r) return { kind: "want", id: "want", agentId: null };
+    }
     for (const sig of mapFx.sigils) {
       if (Math.hypot(sig.x - x, sig.y - y) < 16) return { kind: sig.kind, id: sig.id, agentId: sig.agentId };
     }
@@ -1892,6 +2059,12 @@ function initCanvas() {
     const hit = hitTest(at.x, at.y);
     if (!hit) { closeRadial(); return; }
     if (hit.kind === "mind") openSheet(hit.id);
+    else if (hit.kind === "want") {
+      ui.record = "keeper";
+      save();
+      switchTab("record");
+      renderRecord();
+    }
     else if (hit.kind === "thread") followThread("secret", hit.id);
     else if (hit.kind === "petition") { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
     else if (hit.kind === "dilemma" || hit.kind === "whisper") { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
@@ -2611,7 +2784,7 @@ function renderAdminWorld() {
 function renderAll() {
   credit("day", world.clock.day);
   renderKeeperStrip();
-  renderNow(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
+  renderNow(); renderWant(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
   renderAgents(); renderAdminWorld();
   const selected = ui.selectedId ? agentById(world, ui.selectedId) : null;
   if (selected && !$("mind-sheet").classList.contains("hidden")) {
@@ -2722,6 +2895,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       save();
       renderCharter(/** @type {any} */ ($("record-pane")));
       renderRecord();
+      renderWant();
       return;
     }
     const refuse = target?.closest(".refuse-petition");
@@ -2730,6 +2904,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!result.ok) toast(result.reason || "You cannot rule on that.");
       save();
       renderRecord();
+      renderWant();
       return;
     }
     const settle = target?.closest(".resolve-dilemma");
@@ -2739,6 +2914,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!result.ok) toast(result.reason || "You cannot settle that.");
       save();
       renderRecord();
+      renderWant();
       return;
     }
     const whisper = target?.closest(".act-whisper");
@@ -2747,6 +2923,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (!result.ok) toast(result.reason || "You cannot act on that.");
       save();
       renderRecord();
+      renderWant();
       return;
     }
 
@@ -2761,6 +2938,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-cancel-create").addEventListener("click", closeCreate);
   $("more-feed").addEventListener("click", () => { switchTab("record"); ui.record = "feed"; renderRecord(); });
   $("keeper-strip").addEventListener("click", () => { ui.record = "keeper"; save(); switchTab("record"); });
+  $("want-card").addEventListener("click", () => {
+    ui.record = "keeper";
+    save();
+    switchTab("record");
+    renderRecord();
+  });
   $("sheet-backdrop").addEventListener("click", closeSheet);
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-toggle").addEventListener("click", () => {
