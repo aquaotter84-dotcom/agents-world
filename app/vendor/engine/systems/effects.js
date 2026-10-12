@@ -24,6 +24,20 @@ import { learnSecret, publishSecret, createSecret, agentById, privateSecretsHeld
  */
 
 /**
+ * Fold a secret's text down to something comparable, so "Juno sold out Pim!"
+ * and "juno sold out pim." are recognised as one secret rather than two.
+ * @param {unknown} text
+ * @returns {string}
+ */
+function normalizeClaim(text) {
+  return String(text == null ? "" : text)
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * Apply a list of operations to the world.
  * @param {import("../model/world.js").World} world
  * @param {EffectOp[]} ops
@@ -157,6 +171,19 @@ function applyOne(world, op, tick, meta) {
         id => privateSecretsHeld(world, id).length < capacity
       );
       if (!eligible.length) return null;
+
+      // The world does not learn the same thing twice.
+      //
+      // The same two minds can betray each other in the same way more than once,
+      // and without this the record fills up with a dozen secrets reading "X sold
+      // out Y in front of the whole room". Repetition does not make a world feel
+      // deep, it makes it feel forgetful: a secret is only worth carrying if it
+      // is the only one like it. Normalised so punctuation and casing cannot
+      // smuggle a duplicate through.
+      const claim = normalizeClaim(op.text);
+      if (claim && world.secrets.some(existing => normalizeClaim(existing.text) === claim)) {
+        return null;
+      }
 
       const secret = createSecret(world, {
         kind: op.kind || "knowledge",

@@ -3,46 +3,58 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d12">
 <title>Agents World</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <div id="app">
   <header id="topbar">
-    <div>
+    <div class="tb-left">
       <h1 id="world-title">The World</h1>
-      <p id="world-sub">Elio's view · 9 minds awake</p>
+      <p id="world-sub">Day 1 · dawn</p>
     </div>
-    <div id="live-badge"><span class="dot"></span>LIVE</div>
+    <div class="tb-right">
+      <div id="live-badge"><span class="dot"></span>LIVE</div>
+      <p id="live-note">self-running</p>
+    </div>
   </header>
 
   <main id="screens">
     <!-- WORLD -->
     <section id="screen-world" class="screen active">
-      <div id="stats-row">
-        <div class="stat"><b id="stat-minds">9</b><span>Minds</span></div>
-        <div class="stat"><b id="stat-events">0</b><span>Events</span></div>
-        <div class="stat"><b id="stat-avg">0</b><span title="Average events per mind">Avg</span></div>
-        <div class="stat"><b id="stat-yours">0</b><span>Your</span></div>
+      <div id="headline-card" class="card">
+        <p class="eyebrow" id="headline-eyebrow">Just now</p>
+        <p id="headline-text"></p>
+        <div id="vitals"></div>
       </div>
+
       <div id="map">
         <canvas id="world-canvas"></canvas>
+        <div id="map-plate"><span id="map-day">Day 1</span><span id="map-phase">dawn</span></div>
         <button id="btn-create" title="Create a mind">+ Create</button>
       </div>
-      <p id="map-hint">Tap any mind to read what it is thinking.</p>
+      <p id="map-hint">Tap any mind to read its dossier.</p>
+
       <div id="activity-feed"></div>
+      <button id="more-feed" class="btn ghost">See the whole record →</button>
     </section>
 
-    <!-- MY AGENTS -->
-    <section id="screen-agents" class="screen">
-      <h2 class="screen-title">My Agents</h2>
+    <!-- MINDS -->
+    <section id="screen-minds" class="screen">
+      <h2 class="screen-title">Minds</h2>
+      <p class="note" id="minds-note"></p>
       <div id="agents-list"></div>
     </section>
 
-    <!-- FEED -->
-    <section id="screen-feed" class="screen">
-      <h2 class="screen-title">Feed</h2>
-      <div id="full-feed"></div>
+    <!-- RECORD: feed / chronicle / secrets -->
+    <section id="screen-record" class="screen">
+      <div id="record-tabs">
+        <button class="rtab active" data-view="feed">Feed</button>
+        <button class="rtab" data-view="chronicle">Chronicle</button>
+        <button class="rtab" data-view="secrets">Secrets</button>
+      </div>
+      <div id="record-pane"></div>
     </section>
 
     <!-- MESSAGES -->
@@ -65,48 +77,69 @@
     <!-- ADMIN -->
     <section id="screen-admin" class="screen">
       <h2 class="screen-title">Admin</h2>
+
       <div class="card form">
-        <label>BluesMinds API key
+        <p class="eyebrow">The world runs itself</p>
+        <p class="note">Minds think, wander, gossip and feud with no model at all — the engine writes their
+          day. A key lets a model take over the biggest moments: the confrontations, confessions and
+          betrayals. Everything else is identical either way.</p>
+        <label>BluesMinds API key <span class="note">(optional)</span>
           <input id="set-key" type="password" placeholder="Paste key here" autocomplete="off">
         </label>
         <p class="note">Stored on this device only. Sent only to https://api.bluesminds.com.</p>
         <label>Model
           <input id="set-model" type="text" value="openai/gpt-oss-20b" autocomplete="off">
         </label>
-        <label>Tick interval (seconds)
-          <input id="set-tick" type="number" min="15" value="90">
-        </label>
+      </div>
+
+      <div class="card form">
+        <p class="eyebrow">How fast the world lives</p>
+        <div id="speed-row"></div>
+        <p class="note" id="speed-note"></p>
+      </div>
+
+      <div class="card form">
+        <p class="eyebrow">The record</p>
         <div class="row">
-          <button id="btn-save-admin" class="btn primary">Save</button>
-          <button id="btn-tick" class="btn">Tick now</button>
+          <button id="btn-tick" class="btn">One tick</button>
+          <button id="btn-advance" class="btn">A day</button>
+          <button id="btn-advance-week" class="btn">A week</button>
+        </div>
+        <p class="note" id="admin-world"></p>
+        <div class="row">
+          <button id="btn-save-admin" class="btn primary">Save settings</button>
         </div>
         <div class="row">
           <button id="btn-reset" class="btn danger">Reset world</button>
         </div>
         <p id="admin-status" class="note"></p>
-        <p id="admin-world" class="note"></p>
       </div>
     </section>
   </main>
 
   <nav id="tabbar">
     <button data-tab="world" class="tab active"><span class="ticon">◈</span>World</button>
-    <button data-tab="agents" class="tab"><span class="ticon">⛉</span>My Agents</button>
-    <button data-tab="feed" class="tab"><span class="ticon">▤</span>Feed</button>
+    <button data-tab="minds" class="tab"><span class="ticon">⛉</span>Minds</button>
+    <button data-tab="record" class="tab"><span class="ticon">▤</span>Record</button>
     <button data-tab="messages" class="tab"><span class="ticon">✉</span>Messages</button>
     <button data-tab="admin" class="tab"><span class="ticon">▦</span>Admin</button>
   </nav>
 </div>
 
-<!-- Mind sheet -->
+<!-- Mind dossier -->
 <div id="sheet-backdrop" class="hidden"></div>
 <div id="mind-sheet" class="hidden">
   <div id="sheet-head"></div>
   <p id="sheet-personality" class="note"></p>
   <div id="sheet-rpg"></div>
-  <p id="sheet-thought"></p>
+  <div id="sheet-ties"></div>
+  <div id="sheet-carrying"></div>
+  <div id="sheet-thought-wrap">
+    <p class="eyebrow">Right now, privately</p>
+    <p id="sheet-thought"></p>
+  </div>
   <div class="row">
-    <button id="sheet-chat" class="btn primary">Chat</button>
+    <button id="sheet-chat" class="btn primary">Talk to them</button>
     <button id="sheet-toggle" class="btn">Sleep</button>
     <button id="sheet-close" class="btn">Close</button>
   </div>
@@ -141,6 +174,19 @@
   <div class="row">
     <button id="btn-do-create" class="btn primary">Bring to life</button>
     <button id="btn-cancel-create" class="btn">Cancel</button>
+  </div>
+</div>
+
+<!-- First run -->
+<div id="welcome" class="hidden">
+  <div id="welcome-card">
+    <p class="eyebrow">Agents World</p>
+    <h3>Nine minds are living on this map.</h3>
+    <p class="note" id="welcome-body"></p>
+    <div class="row">
+      <button id="welcome-go" class="btn primary">Watch them</button>
+      <button id="welcome-fast" class="btn">Fast-forward a week</button>
+    </div>
   </div>
 </div>
 

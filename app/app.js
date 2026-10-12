@@ -2,17 +2,31 @@
  * Vanilla JS ES module, no build step. The deterministic simulation engine
  * (vendored from engine/) owns the world; this file renders it and spends the
  * model budget on the engine's moments. State persists in localStorage.
- * The BluesMinds API key lives ONLY in localStorage, is never logged, and is
- * sent only to https://api.bluesminds.com. No background service: ticks run
- * only while the app is open.
+ *
+ * Two rules shape everything here:
+ *
+ *   1. The world never waits for a model. With an API key the biggest beats of
+ *      each tick are written by BluesMinds; without one the engine narrates
+ *      them itself. Either way the map moves, the feed fills, and days close
+ *      into chronicle entries. A key changes the voice, not the world.
+ *   2. The engine already knows more than the screen was showing — grudges,
+ *      bonds, factions, secrets, what each mind is chewing on — so the UI's job
+ *      is to put that on the surface rather than to invent a layer on top.
+ *
+ * The API key lives ONLY in localStorage, is never logged, and is sent only to
+ * https://api.bluesminds.com. No background service: ticks run while the app is
+ * open, and any time the app was closed is paid back on load as a catch-up.
  */
 import {
-  createWorld, step, resolveMoment,
+  createWorld, step, resolveMoment, runTicks, worldStats,
   serializeWorld, deserializeWorld,
-  agentById, livingAgents, regionName,
+  agentById, livingAgents, regionName, regionOccupancy,
   moodWord, stateLine, describeClock, phaseOf,
   REGIONS, GOAL_IDEAS, BACKSTORIES,
-  bondsOf, rivalsOf
+  describeRelation,
+  socialTemperature, currentFactions,
+  secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
+  levelProgress, pressingNeed
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -21,9 +35,28 @@ import { buildPrompt, parseReply } from "./vendor/server/prompt.js";
 import { migrateV1Save } from "./migrate.js";
 
 const STORE_KEY = "agentsworld.v2";
+/**
+ * Every world gets a name, derived from its seed so it never changes under the
+ * keeper's feet. A world you have watched for a week should not still be called
+ * "The World".
+ */
+const WORLD_FIRST = ["Amber", "Quiet", "Hollow", "Long", "Grey", "Little", "Salt", "Bright", "Slow", "Old", "Deep", "Pale"];
+const WORLD_LAST = ["Reach", "Meridian", "Ward", "Threshold", "Crossing", "Holding", "Verdict", "Interval", "Refuge", "Ledger", "Compass", "Anchor"];
+function worldNameFor(seed) {
+  let h = 0;
+  for (const c of String(seed)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  // `>>>` not `>>`: a signed shift on a 32-bit hash goes negative and indexes
+  // the name table from the wrong end.
+  return "The " + WORLD_FIRST[h % WORLD_FIRST.length] + " " + WORLD_LAST[(h >>> 7) % WORLD_LAST.length];
+}
 const OLD_KEY = "agentsworld.v1";
 const BM_URL = "https://api.bluesminds.com/v1/chat/completions";
 const THOUGHT_TTL_MS = 5 * 60 * 1000;
+/** A brand-new world is given this much history so it opens mid-story. */
+const OPENING_TICKS = 108;          // just over two world days
+/** Ceiling on how much missed time is paid back in one load. */
+const CATCHUP_CAP_TICKS = 480;      // ten world days
+const CATCHUP_MAX_HOURS = 8;        // beyond this, the world just picks up fresh
 
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
@@ -44,15 +77,16 @@ const ICONS = ["✦", "✧", "❖", "◉", "◎", "⛨", "⛉", "⚒", "☾", "�
 
 /* ---------- state ---------- */
 let world = null;
-let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 90 };
+let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45 };
 let chats = {};
-let ui = { selectedId: null, chatId: null };
+let ui = { selectedId: null, chatId: null, record: "feed" };
+let lastSeenAt = Date.now();
 
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       world: serializeWorld(world),
-      settings, chats, ui
+      settings, chats, ui, lastSeenAt: Date.now()
     }));
   } catch (e) { /* storage full/blocked */ }
 }
@@ -68,7 +102,8 @@ function load() {
       settings = Object.assign(settings, s.settings);
       chats = s.chats || {};
       ui = Object.assign(ui, s.ui);
-      return;
+      lastSeenAt = s.lastSeenAt || Date.now();
+      return { fresh: false };
     }
     // Migrate Jeremy's live v1 world — never start him over.
     const oldRaw = localStorage.getItem(OLD_KEY);
@@ -83,33 +118,40 @@ function load() {
           if (old.settings.model) settings.model = old.settings.model;
           if (old.settings.tickSeconds) settings.tickSeconds = old.settings.tickSeconds;
         }
+        lastSeenAt = Date.now();
         save();
-        return;
+        return { fresh: true };
       }
     }
   } catch (e) { /* corrupt: fall through to fresh */ }
   world = freshWorld();
+  lastSeenAt = Date.now();
   save();
+  return { fresh: true };
 }
 
 /* ---------- tiny DOM helpers ---------- */
 const $ = id => document.getElementById(id);
 let toastTimer = null;
-function toast(msg) {
+function toast(msg, ms) {
+  // A delayed toast can outlive the document it was queued against (a page
+  // teardown, or a test harness) — say nothing rather than throw.
+  if (typeof document === "undefined" || !document.body) return;
   let el = $("toast");
   if (!el) {
     el = document.createElement("div");
     el.id = "toast";
     document.body.appendChild(el);
   }
-  el.textContent = msg;
+  el.innerHTML = msg;
   el.classList.add("show");
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 4000);
+  toastTimer = setTimeout(() => el.classList.remove("show"), ms || 4600);
 }
 const tickNow = () => world.clock.tick;
 const hasKey = () => !!(settings.apiKey && settings.apiKey.trim());
 const agentName = a => a.name + (a.epithet ? " " + a.epithet : "");
+const modelLabel = () => (hasKey() ? (settings.model || "a model") : "the engine");
 
 /* Stable per-agent jitter so minds sharing a region don't stack on one dot. */
 function jitterFor(id) {
@@ -124,6 +166,65 @@ function mapPos(a) {
     x: Math.min(94, Math.max(6, r.x + j.dx)),
     y: Math.min(94, Math.max(6, r.y + j.dy))
   };
+}
+
+/* ---------- world reading: the few derived things the UI needs ---------- */
+
+/** The world's emotional weather, in one word, from its own social graph. */
+function worldMood() {
+  const t = socialTemperature(world);
+  if (t.ratio >= 2.2) return { word: "warm", cls: "warm", line: "people are glad of each other" };
+  if (t.ratio >= 1.35) return { word: "settled", cls: "calm", line: "mostly getting along" };
+  if (t.ratio >= 1.02) return { word: "even", cls: "", line: "affection and friction in balance" };
+  if (t.ratio >= 0.75) return { word: "strained", cls: "tense", line: "more friction than warmth" };
+  return { word: "bitter", cls: "tense", line: "the world is mostly grievance" };
+}
+
+/** The single line worth leading with: the biggest thing said lately. */
+function headline(lookbackTicks = 14) {
+  const floor = world.clock.tick - lookbackTicks;
+  let best = null;
+  for (const e of world.events) {
+    if (e.tick < floor) break;
+    if (e.kind === "chronicle") continue;
+    if (!best || (e.significance || 0) > (best.significance || 0)) best = e;
+  }
+  return best || world.events[0] || null;
+}
+
+function tiesOf(a, limit = 5) {
+  const out = [];
+  for (const [id, edge] of Object.entries(a.relations)) {
+    const other = agentById(world, id);
+    if (!other || other.retired) continue;
+    const word = describeRelation(edge);
+    const weight = Math.abs(edge.affinity) + edge.resentment * 1.1 + edge.fear * 0.6 +
+      (edge.trust >= 65 || edge.trust <= 20 ? 14 : 0);
+    // "Neutral" is the absence of a tie. Only real familiarity earns a row.
+    if (word === "neutral" && weight < 26) continue;
+    if (weight < 12) continue;
+    out.push({ other, edge, weight, word });
+  }
+  out.sort((x, y) => y.weight - x.weight);
+  return out.slice(0, limit);
+}
+
+/** What a mind is doing with its days right now, in its own voice. */
+function doingLine(a) {
+  if (!a.awake) return "Asleep.";
+  const last = world.events.find(e => e.agentId === a.id);
+  if (last && world.clock.tick - last.tick <= 3) return last.text;
+  const need = pressingNeed(a);
+  if (need.value <= 25) {
+    const want = {
+      energy: "Running on empty — looking for somewhere to put their head down.",
+      connection: "Has gone too long without anyone. Looking for company.",
+      esteem: "Something has got under their skin. Needs to be seen to be worth something.",
+      meaning: "Has lost the thread of why any of it matters."
+    };
+    return want[need.key] || "Unsettled.";
+  }
+  return "At " + regionName(world, a.regionId) + ", working on: " + a.goal.text;
 }
 
 /* ---------- BluesMinds: one call at a time, spaced, with 429 backoff ---------- */
@@ -207,22 +308,45 @@ function cleanReply(text, agent) {
 let tickTimer = null;
 let ticking = false;
 
+/**
+ * Resolve every moment the engine offered this tick, with no model involved.
+ * This is what makes the world work with no API key — and it is also the exact
+ * path a model-backed world falls back to whenever a call is slow or fails.
+ */
+function settleMoments(moments) {
+  for (const moment of moments) {
+    if (!world.pending.some(m => m.id === moment.id)) continue;
+    resolveMoment(world, moment.id, {});
+  }
+}
+
+/** Run the world forward n ticks offline, engine narrating everything. */
+function advanceOffline(n) {
+  for (let i = 0; i < n; i++) {
+    const report = step(world);
+    settleMoments(report.moments);
+  }
+}
+
 async function tick(manual) {
   if (ticking) return;
   ticking = true;
   try {
-    if (!hasKey()) {
-      if (manual) toast("The minds are asleep — add your API key in Admin to wake them.");
-      return;
-    }
     const awake = livingAgents(world).filter(a => a.awake);
     if (!awake.length) {
-      if (manual) toast("Every mind is asleep. Wake one in My Agents.");
+      if (manual) toast("Every mind is asleep. Wake one in Minds.");
       return;
     }
     const report = step(world);
     save();
-    renderWorld();
+    renderAll();
+    if (!hasKey()) {
+      // No model: the engine answers its own biggest beats, immediately.
+      settleMoments(report.moments);
+      save();
+      renderAll();
+      return;
+    }
     // Spend the model budget on the engine's moments, one at a time. The world
     // never waits: unanswered moments are decided by the engine itself.
     for (const moment of report.moments) {
@@ -242,7 +366,7 @@ async function resolveMomentWithModel(moment, manual) {
     const res = resolveMoment(world, moment.id, answer);
     if (res.ok) {
       save();
-      renderWorld();
+      renderAll();
     }
     // else: the engine already decided this beat (expiry) — nothing to do.
   } catch (err) {
@@ -274,7 +398,8 @@ async function mindReplies(a, history) {
   const sys = "You are " + agentName(a) + ", " + a.personality +
     " — one mind in a shared living world, chatting one-on-one with the world's keeper (Jeremy). " +
     "Live state: " + stateLine(a, tickNow()) +
-    ". Stay in character, be vivid but concise (a few sentences max). Never mention you are AI.";
+    ".\nWhere you are: " + regionName(world, a.regionId) + ". What you are working on: " + a.goal.text +
+    ".\nStay in character, be vivid but concise (a few sentences max). Never mention you are AI.";
   const msgs = [{ role: "system", content: sys }]
     .concat(history.slice(-14).map(h => ({ role: h.role, content: h.content })));
   return bmChat(msgs, 220);
@@ -282,7 +407,7 @@ async function mindReplies(a, history) {
 
 function armTick() {
   if (tickTimer) clearInterval(tickTimer);
-  const secs = Math.max(15, parseInt(settings.tickSeconds, 10) || 90);
+  const secs = Math.max(15, parseInt(settings.tickSeconds, 10) || 45);
   tickTimer = setInterval(() => { tick(false); }, secs * 1000);
 }
 
@@ -298,7 +423,8 @@ const KIND_TONE = {
 /* Stamp events "Day 3 · dusk" from the engine's own clock math. */
 function eventStamp(e) {
   try {
-    const mpt = (world.config && world.config.minutesPerTick) || 30;
+    const mpt = (world.config && world.config.clock && world.config.clock.minutesPerTick) ||
+      (world.config && world.config.minutesPerTick) || 30;
     const mins = world.clock.minutes - (world.clock.tick - e.tick) * mpt;
     const day = Math.floor(mins / 1440) + 1;
     const hour = Math.floor(((mins % 1440) + 1440) % 1440 / 60);
@@ -316,41 +442,149 @@ function eventCard(e) {
   const div = document.createElement("div");
   div.className = "card event" + (tone ? " tone-" + tone : "");
   div.innerHTML =
-    '<div class="eicon" style="color:' + esc(color) + '">' + esc(icon) + "</div>" +
+    '<div class="eicon' + (a ? " tappable" : "") + '" style="color:' + esc(color) + '">' + esc(icon) + "</div>" +
     '<div><div class="etext">' + esc(e.text) + "</div>" +
-    '<div class="emeta">' + esc(name) + " · " + esc(eventStamp(e)) + "</div></div>";
+    '<div class="emeta"><span class="ewho">' + esc(name) + "</span> · " + esc(eventStamp(e)) + "</div></div>";
+  if (a) {
+    const open = () => openSheet(a.id);
+    div.querySelector(".eicon").addEventListener("click", open);
+    div.querySelector(".ewho").addEventListener("click", open);
+  }
   return div;
 }
 
-function renderFeed() {
-  const feed = $("activity-feed");
-  feed.innerHTML = "";
-  world.events.slice(0, 12).forEach(e => feed.appendChild(eventCard(e)));
-  if (!world.events.length) {
-    feed.innerHTML = '<p class="note" style="text-align:center">The world is quiet. ' +
-      (hasKey() ? "Minds will act on the next tick." : "Add your API key in Admin to wake the minds.") + "</p>";
-  }
-}
-function renderFullFeed() {
-  const feed = $("full-feed");
-  feed.innerHTML = "";
-  world.events.forEach(e => feed.appendChild(eventCard(e)));
-  if (!world.events.length) feed.innerHTML = '<p class="note">No events yet.</p>';
+/* ---- the world, in one panel ---- */
+function renderNow() {
+  const stats = worldStats(world);
+  const mood = worldMood();
+  const head = headline();
+  const card = $("headline-card");
+  const tone = head ? (KIND_TONE[head.kind] || "") : "";
+  card.className = "card" + (tone ? " tone-" + tone : "");
+  $("headline-eyebrow").textContent = head
+    ? (head.tick >= world.clock.tick - 1 ? "Just now" : eventStamp(head))
+    : "So far";
+  $("headline-text").textContent = head ? "\u201C" + head.text + "\u201D" : "The world is holding its breath.";
+
+  const factions = currentFactions(world).sort((a, b) => b.length - a.length);
+  const camps = factions.length;
+  const vitals = [
+    '<span class="vital ' + mood.cls + '" title="' + esc(mood.line) + '"><i class="vdot"></i>' + esc(mood.word) + "</span>",
+    "<span class=\"vital\">Day <b>" + stats.day + "</b></span>",
+    '<span class="vital">' + esc(stats.phase) + " <b>" + stats.awakened + "</b> awake</span>",
+    '<span class="vital">Secrets <b>' + (stats.secrets - stats.publicSecrets) + "</b> held, <b>" + stats.publicSecrets + "</b> out</span>",
+    '<span class="vital" title="minds carrying a grudge against someone"><i class="vdot" style="background:var(--danger)"></i>Feuding <b>' +
+      stats.conflicts + "</b></span>",
+    camps > 0
+      ? '<span class="vital">Camps <b>' + camps + "</b></span>"
+      : '<span class="vital">No camps yet</span>'
+  ];
+  $("vitals").innerHTML = vitals.join("");
 }
 
 function renderStats() {
   const living = livingAgents(world);
   const awake = living.filter(a => a.awake).length;
-  $("stat-minds").textContent = living.length;
-  $("stat-events").textContent = world.events.length;
-  $("stat-avg").textContent = living.length ? (world.events.length / living.length).toFixed(1) : "0";
-  $("stat-yours").textContent = living.filter(a => a.userCreated).length;
-  const sel = ui.selectedId ? agentById(world, ui.selectedId) : living[0];
-  $("world-sub").textContent = (sel ? sel.name + "'s view" : "The World") + " · " + awake + " minds awake";
+  $("world-title").textContent = worldNameFor(world.seed);
+  $("world-sub").textContent = "Day " + world.clock.day + " · " + world.clock.phase + " · " +
+    awake + "/" + living.length + " awake";
+  $("map-day").textContent = "Day " + world.clock.day;
+  $("map-phase").textContent = world.clock.phase;
   const badge = $("live-badge");
-  const live = hasKey() && awake > 0;
+  const live = awake > 0;
   badge.classList.toggle("paused", !live);
-  badge.innerHTML = '<span class="dot"></span>' + (live ? "LIVE" : hasKey() ? "IDLE" : "ASLEEP");
+  badge.innerHTML = '<span class="dot"></span>' + (!live ? "IDLE" : hasKey() ? "LIVE" : "SELF-RUNNING");
+  $("live-note").textContent = hasKey() ? (settings.model || "model") : "the engine writes it";
+}
+function renderFeed() {
+  const feed = $("activity-feed");
+  feed.innerHTML = "";
+  world.events.slice(0, 6).forEach(e => feed.appendChild(eventCard(e)));
+  if (!world.events.length) {
+    feed.innerHTML = '<p class="note" style="text-align:center">The world is quiet. Give it a tick.</p>';
+  }
+}
+
+/* ---- the record: feed, chronicle, secrets ---- */
+function renderRecord() {
+  const pane = $("record-pane");
+  pane.innerHTML = "";
+  document.querySelectorAll(".rtab").forEach(t =>
+    t.classList.toggle("active", t.dataset.view === ui.record));
+  if (ui.record === "chronicle") {
+    if (!world.chronicle.length) {
+      pane.innerHTML = '<p class="note">No day has closed yet. The first entry is written at the end of ' +
+        "Day 1 — a summary of everything the world decided worth remembering.</p>";
+      return;
+    }
+    world.chronicle.slice().reverse().forEach(day => {
+      const d = document.createElement("div");
+      d.className = "card day-card";
+      d.innerHTML =
+        '<div class="dhead"><span>Day ' + day.day + "</span><em>" + day.notableCount + " things worth noting</em></div>" +
+        '<div class="dbody">' + esc(day.summary) + "</div>" +
+        '<div class="dfoot">' + (day.stats ? day.stats.events + " events · " + day.stats.secretsPublic + " secrets public" : "") + "</div>";
+      pane.appendChild(d);
+    });
+    return;
+  }
+  if (ui.record === "secrets") {
+    const secrets = world.secrets.slice().sort((a, b) => {
+      if (a.isPublic !== b.isPublic) return a.isPublic ? -1 : 1;
+      return b.originTick - a.originTick;
+    });
+    if (!secrets.length) {
+      pane.innerHTML = '<p class="note">Nothing is being kept from anybody. That will not last.</p>';
+      return;
+    }
+    const intro = document.createElement("p");
+    intro.className = "note";
+    intro.style.margin = "0 4px 8px";
+    intro.textContent = "Everything the world knows and is not saying out loud. A secret spreads by " +
+      "gossip and by confession, loses accuracy at every hop, and stops being a secret the moment " +
+      "it goes public.";
+    pane.appendChild(intro);
+    for (const s of secrets) {
+      const holders = Object.keys(s.holders);
+      const about = s.aboutId ? agentById(world, s.aboutId) : null;
+      const d = document.createElement("div");
+      d.className = "card secret-card" + (s.isPublic ? " public" : "");
+      const chips = holders.slice(0, 6).map(id => {
+        const h = agentById(world, id);
+        if (!h) return "";
+        const f = s.holders[id];
+        return '<span class="chip' + (s.isPublic ? " bad" : "") + '">' + esc(h.icon) + " " + esc(h.name) +
+          (f < 0.85 ? " · half-remembered" : "") + "</span>";
+      }).join("");
+      d.innerHTML =
+        '<div class="stext">' + esc(s.isPublic ? s.text : "…" + s.text) + "</div>" +
+        '<div class="smeta">' + (s.isPublic ? "PUBLIC" : "HELD BY " + holders.length) +
+        (about ? " · about " + esc(about.name) : "") +
+        " · since day " + dayOfTick(s.originTick) + "</div>" +
+        '<div class="holders">' + chips + "</div>";
+      pane.appendChild(d);
+    }
+    return;
+  }
+  // feed
+  if (!world.events.length) {
+    pane.innerHTML = '<p class="note">Nothing has happened yet.</p>';
+    return;
+  }
+  const shown = world.events.slice(0, 400);
+  shown.forEach(e => pane.appendChild(eventCard(e)));
+  if (world.events.length > shown.length) {
+    const p = document.createElement("p");
+    p.className = "note";
+    p.style.textAlign = "center";
+    p.textContent = "…and " + (world.events.length - shown.length) + " older lines in the record.";
+    pane.appendChild(p);
+  }
+}
+
+function dayOfTick(tick) {
+  const mpt = (world.config.clock && world.config.clock.minutesPerTick) || 30;
+  return Math.floor((tick * mpt) / 1440) + 1;
 }
 
 /* ---------- canvas world map: painterly terrain, glowing orbs, weather of the soul ---------- */
@@ -369,6 +603,18 @@ const PHASE_TINT = {
   "night":      { c: "16,18,70",    a: 0.24, glow: 0.35 },
   "deep night": { c: "6,8,36",      a: 0.34, glow: 0.50 }
 };
+/* How a mood reads on the map. The ring around an orb is the mind's weather. */
+const MOOD_COLOR = {
+  triumphant: "#fbbf24",
+  content:    "#34d399",
+  steady:     "#8fa3bd",
+  restless:   "#7dd3fc",
+  weary:      "#c99a5b",
+  lonely:     "#a78bfa",
+  bitter:     "#c084fc",
+  adrift:     "#5b7fa8",
+  exhausted:  "#b45454"
+};
 
 const mapFx = {
   cv: null, ctx: null, terrain: null, w: 0, h: 0, dpr: 1,
@@ -376,7 +622,7 @@ const mapFx = {
   ripples: [],         // {x,y,t0,color}
   wisps: [],           // {x0,y0,x1,y1,t0}
   motes: [],           // {x,y,vx,vy,r,ph}
-  sprites: new Map(),  // pre-rendered orb glow sprites by color|state
+  sprites: new Map(),  // pre-rendered orb glow sprites by color|state|mood
   lastFxSeq: 0, fxInit: false,
   running: false
 };
@@ -411,11 +657,15 @@ function buildTerrain() {
   // deep base
   g.fillStyle = "#0b0b10";
   g.fillRect(0, 0, w, h);
-  // painterly region washes, layered
+  // Region washes, sized by how many minds are actually living there — the map
+  // is a picture of the world's attention, not a static backdrop.
+  const occ = world ? regionOccupancy(world) : {};
   for (const r of REGIONS) {
     const art = REGION_ART[r.id] || { core: "#6b5f8a", soft: "rgba(107,95,138,0.15)" };
+    const count = (occ[r.id] || []).length;
+    const heat = Math.min(1, count / 4);
     const cx = (r.x / 100) * w, cy = (r.y / 100) * h;
-    const rad = Math.max(w, h) * 0.30;
+    const rad = Math.max(w, h) * (0.28 + heat * 0.06);
     let gr = g.createRadialGradient(cx, cy, 0, cx, cy, rad);
     gr.addColorStop(0, art.soft);
     gr.addColorStop(0.55, art.soft.replace(/[\d.]+\)$/, "0.07)"));
@@ -424,7 +674,7 @@ function buildTerrain() {
     g.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
     // hot heart of the region
     gr = g.createRadialGradient(cx, cy, 0, cx, cy, rad * 0.35);
-    gr.addColorStop(0, art.soft.replace(/[\d.]+\)$/, "0.16)"));
+    gr.addColorStop(0, art.soft.replace(/[\d.]+\)$/, (0.16 + heat * 0.12).toFixed(3) + ")"));
     gr.addColorStop(1, "rgba(0,0,0,0)");
     g.fillStyle = gr;
     g.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
@@ -481,7 +731,8 @@ function buildTerrain() {
   g.font = "italic 12px Georgia, 'Times New Roman', serif";
   g.textAlign = "center";
   for (const r of REGIONS) {
-    g.fillText(r.name, (r.x / 100) * w, (r.y / 100) * h - 34);
+    const count = (occ[r.id] || []).length;
+    g.fillText(r.name + (count ? "  · " + count : ""), (r.x / 100) * w, (r.y / 100) * h - 34);
   }
   // vignette
   const vg = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75);
@@ -505,11 +756,12 @@ function seedMotes() {
   }
 }
 
-/* Orb sprites: halo + body + ring pre-rendered once per color/state, so the
+/* Orb sprites: halo + body + ring pre-rendered once per color/state/mood, so the
  * frame loop is just drawImage + text. Phone GPUs hate per-frame shadowBlur. */
-function orbSprite(a) {
+function orbSprite(a, moodWordNow) {
   const awake = a.awake && !a.retired;
-  const key = (a.color || "#8b5cf6") + (awake ? "|1" : "|0");
+  const mood = awake ? (MOOD_COLOR[moodWordNow] || MOOD_COLOR.steady) : "#6a6a78";
+  const key = (a.color || "#8b5cf6") + (awake ? "|1|" : "|0|") + mood;
   let sp = mapFx.sprites.get(key);
   if (sp) return sp;
   const R = 19, haloR = R * 2.7, pad = haloR + 10;
@@ -535,20 +787,32 @@ function orbSprite(a) {
   g.shadowColor = a.color;
   g.shadowBlur = 18;
   g.stroke();
+  // the mind's weather, as a ring just outside the body
+  g.shadowBlur = 0;
+  g.lineWidth = 1.6;
+  g.strokeStyle = mood;
+  g.globalAlpha = (awake ? 0.9 : 0.35);
+  g.beginPath(); g.arc(cx, cy, R + 4.5, 0, Math.PI * 2); g.stroke();
   sp = { c, S };
-  if (mapFx.sprites.size > 48) mapFx.sprites.clear();
+  if (mapFx.sprites.size > 96) mapFx.sprites.clear();
   mapFx.sprites.set(key, sp);
   return sp;
 }
 
-function drawOrb(g, a, t, glowBoost) {
+function orbXY(a, t) {
   const p = mapPos(a);
-  const x = (p.x / 100) * mapFx.w;
-  const y = (p.y / 100) * mapFx.h + Math.sin(t * 0.0011 + phaseFor(a.id)) * 3;
+  return {
+    x: (p.x / 100) * mapFx.w,
+    y: (p.y / 100) * mapFx.h + Math.sin(t * 0.0011 + phaseFor(a.id)) * 3
+  };
+}
+
+function drawOrb(g, a, t, glowBoost) {
+  const { x, y } = orbXY(a, t);
   const pulse = 1 + Math.sin(t * 0.0021 + phaseFor(a.id) * 2.3) * 0.07;
   const awake = a.awake && !a.retired;
   mapFx.orbs.push({ id: a.id, x, y });
-  const sp = orbSprite(a);
+  const sp = orbSprite(a, moodWord(a, tickNow()));
   const S = sp.S * pulse;
   g.save();
   g.globalAlpha = awake ? Math.min(1, 0.88 + glowBoost * 0.3) : 0.5;
@@ -565,24 +829,74 @@ function drawOrb(g, a, t, glowBoost) {
   // name
   g.font = "600 10px system-ui";
   g.fillStyle = awake ? "rgba(242,242,245,0.92)" : "rgba(154,154,168,0.6)";
-  g.fillText(String(a.name).toUpperCase().slice(0, 12), x, y + R + 11);
+  g.fillText(String(a.name).toUpperCase().slice(0, 12), x, y + R + 12);
   g.restore();
   // selection ring
   if (ui.selectedId === a.id) {
     g.save();
     g.strokeStyle = hexA(a.color, 0.7 + 0.3 * Math.sin(t * 0.004));
     g.lineWidth = 1.5;
-    g.beginPath(); g.arc(x, y, R + 7, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.arc(x, y, R + 9, 0, Math.PI * 2); g.stroke();
     g.restore();
   }
 }
 
-/* #rrggbb + alpha → rgba() */
-function hexA(hex, a) {
-  const h = String(hex || "#8b5cf6").replace("#", "");
-  const v = h.length === 3 ? h.split("").map(c => c + c).join("") : h.padEnd(6, "0");
-  const n = parseInt(v.slice(0, 6), 16);
-  return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")";
+/**
+ * The social graph, drawn.
+ *
+ * A world of nine minds has thirty-six edges and most of them mean nothing, so
+ * only the ones that actually carry weight are drawn: alliances as warm bonds,
+ * grudges as frayed red lines. Tapping a mind lights up its own ties and dims
+ * the rest, which turns the map into the answer to "who is this person to
+ * everyone else?" — the question the map was always the right shape for.
+ */
+function drawTies(g, t) {
+  const living = livingAgents(world);
+  if (living.length < 2) return;
+  const sel = ui.selectedId;
+  const pos = new Map(living.map(a => [a.id, orbXY(a, t)]));
+  const alliance = world.config.relations.allianceThreshold;
+  const rivalry = world.config.relations.rivalryThreshold;
+
+  for (let i = 0; i < living.length; i++) {
+    for (let j = i + 1; j < living.length; j++) {
+      const A = living[i], B = living[j];
+      // Read the edges straight off the models. `edgeToward` would *create* a
+      // neutral edge for every pair it is asked about, and this runs sixty times
+      // a second — a render path must never write to the simulation.
+      const ea = A.relations[B.id], eb = B.relations[A.id];
+      if (!ea || !eb) continue;
+      const warm = (ea.affinity + eb.affinity) / 2;
+      const hot = (ea.resentment + eb.resentment) / 2;
+      const isSel = sel && (A.id === sel || B.id === sel);
+      const kind = warm >= Math.max(18, alliance - 22) ? "warm" : hot >= Math.max(14, rivalry - 8) ? "hot" : null;
+      if (!kind) continue;
+      const strength = kind === "warm" ? warm : hot;
+      if (!isSel && strength < (kind === "warm" ? 34 : 22)) continue;
+      const p1 = pos.get(A.id), p2 = pos.get(B.id);
+      if (!p1 || !p2) continue;
+      const k = Math.min(1, strength / (kind === "warm" ? 90 : 55));
+      const alpha = (isSel ? 0.5 : 0.2) + k * (isSel ? 0.45 : 0.3);
+      // A shallow bow keeps parallel lines from collapsing into one another.
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const nx = -(p2.y - p1.y), ny = (p2.x - p1.x);
+      const nl = Math.hypot(nx, ny) || 1;
+      const bow = Math.min(26, nl * 0.12);
+      const cxp = mx + (nx / nl) * bow, cyp = my + (ny / nl) * bow;
+
+      g.save();
+      g.strokeStyle = kind === "warm"
+        ? "rgba(251,191,36," + alpha.toFixed(3) + ")"
+        : "rgba(248,113,113," + alpha.toFixed(3) + ")";
+      g.lineWidth = 1 + k * (isSel ? 2.6 : 1.6);
+      g.setLineDash(kind === "hot" ? [4, 4] : []);
+      g.beginPath();
+      g.moveTo(p1.x, p1.y);
+      g.quadraticCurveTo(cxp, cyp, p2.x, p2.y);
+      g.stroke();
+      g.restore();
+    }
+  }
 }
 
 function drawMapFrame(t) {
@@ -605,6 +919,8 @@ function drawMapFrame(t) {
     g.fillStyle = "rgba(220,210,255," + Math.max(0.02, tw).toFixed(3) + ")";
     g.beginPath(); g.arc(m.x * w, m.y * h, m.r, 0, Math.PI * 2); g.fill();
   }
+  // ties under the orbs
+  drawTies(g, t);
   // orbs
   fx.orbs.length = 0;
   for (const a of livingAgents(world)) drawOrb(g, a, t, tint.glow);
@@ -714,17 +1030,92 @@ function energyBar(val) {
 }
 function rpgBlock(a) {
   const t = tickNow();
+  const prog = levelProgress(a, world.config.progression.levelDivisor);
+  const need = pressingNeed(a);
   return '<div class="astats">' +
     '<div class="astat"><span>Level</span><b>' + a.level + "</b></div>" +
     '<div class="astat"><span>Energy</span>' + energyBar(a.needs.energy) + "<b>" + Math.round(a.needs.energy) + "</b></div>" +
     '<div class="astat"><span>Mood</span><b class="mood">' + esc(moodWord(a, t)) + "</b></div>" +
-    '<div class="astat"><span>XP</span><b>' + a.xp + "</b></div>" +
+    '<div class="astat"><span>XP</span><b>' + Math.round(a.xp) + "</b></div>" +
     "</div>" +
     '<div class="drives compact">' +
     driveBar("Foc", a.drives.focus) + driveBar("Soc", a.drives.social) +
     driveBar("Cou", a.drives.courage) + driveBar("Cre", a.drives.creativity) +
     "</div>" +
-    '<div class="goal-line"><span class="glabel">GOAL</span> ' + esc(a.goal.text) + "</div>";
+    '<div class="goal-line"><span class="glabel">GOAL</span> ' + esc(a.goal.text) +
+    ' <span class="note">(' + Math.round(a.goal.progress * 100) + "% along)</span></div>" +
+    (need.value <= 30
+      ? '<div class="goal-line"><span class="glabel">NEED</span> running short of ' + esc(need.key) +
+        " — " + Math.round(need.value) + "/100</div>"
+      : "") +
+    (prog > 0 ? '<div class="goal-line"><span class="glabel">LEVEL ' + (a.level + 1) + "</span> " +
+      Math.round(prog * 100) + "% of the way to the next one</div>" : "");
+}
+
+function tieRows(a) {
+  const ties = tiesOf(a, 6);
+  if (!ties.length) {
+    return '<span class="sec-tag">Ties</span><p class="note">Has not yet formed a strong opinion about anyone. ' +
+      "That will change.</p>";
+  }
+  const rows = ties.map(({ other, edge, word }) => {
+    const warm = Math.max(0, Math.min(100, edge.affinity));
+    const cold = Math.max(0, Math.min(100, edge.resentment));
+    const trust = Math.max(0, Math.min(100, edge.trust));
+    return '<div class="tie"><span class="tname" style="color:' + esc(other.color) + '">' +
+      esc(other.icon) + " " + esc(other.name) + "</span>" +
+      '<span class="tword">' + esc(word) + "</span>" +
+      '<span class="tbar" title="affection ' + Math.round(warm) + ", trust " + Math.round(trust) +
+      ", resentment " + Math.round(cold) + '">' +
+      '<i class="warm" style="width:' + warm + '%"></i>' +
+      '<i class="cold" style="width:' + cold + '%"></i>' +
+      "</span></div>";
+  }).join("");
+  return '<span class="sec-tag">Ties</span>' + rows;
+}
+
+function carryingBlock(a) {
+  const held = privateSecretsHeld(world, a.id);
+  const known = secretsAbout(world, a.id).filter(s => s.aboutId === a.id);
+  const leaking = known.filter(s => s.isPublic);
+  let html = '<span class="sec-tag">Carrying</span>';
+  if (!held.length) {
+    html += '<p class="note">' + esc(a.name) + " is carrying nothing they would not say out loud.</p>";
+  } else {
+    html += held.slice(0, 4).map(s => {
+      const f = s.holders[a.id];
+      const about = s.aboutId ? agentById(world, s.aboutId) : null;
+      // When the secret is about the mind holding it, saying so adds nothing.
+      const aboutBit = about && about.id !== a.id ? "about " + esc(about.name) + " · " : "";
+      return '<div class="burden">' + esc(secretTextFor(s, f)) +
+        '<span class="bsrc">' + aboutBit +
+        (f >= 0.85 ? "told straight" : f >= 0.6 ? "heard second-hand" : "half-remembered") +
+        (s.isPublic ? " · and it is out now" : "") + "</span></div>";
+    }).join("");
+    if (held.length > 4) {
+      html += '<p class="note">…and ' + (held.length - 4) + " more they have not found a use for.</p>";
+    }
+  }
+  if (leaking.length) {
+    html += '<p class="note">' + leaking.length + " of the things said about " + esc(a.name) +
+      (leaking.length === 1 ? " is" : " are") + " out in the open now.</p>";
+  }
+  return html;
+}
+
+function preoccupationBlock(a) {
+  // Recall can surface the same line twice — a mind that heard one thing twice
+  // remembers it twice — but a list that repeats itself looks like a bug.
+  const seen = new Set();
+  const top = preoccupations(world, a, 5).filter(tr => {
+    const key = String(tr.text || "").trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 3);
+  if (!top.length) return "";
+  return '<span class="sec-tag">On their mind</span>' +
+    top.map(tr => '<div class="burden">' + esc(String(tr.text || "").slice(0, 180)) + "</div>").join("");
 }
 
 function openSheet(id) {
@@ -735,25 +1126,21 @@ function openSheet(id) {
   renderStats();
   $("sheet-head").innerHTML =
     '<span class="orb sheet-orb" style="border-color:' + esc(a.color) + ";box-shadow:0 0 22px " + esc(a.color) + '">' + esc(a.icon) + "</span>" +
-    "<span>" + esc(a.name) + (a.epithet ? ' <span class="note">' + esc(a.epithet) + "</span>" : "") + "</span>";
+    "<span>" + esc(a.name) + (a.epithet ? " " + esc(a.epithet) : "") +
+    '<span class="sh-sub">' + esc(a.class) + " · " + esc(a.archetype) + " · Lv " + a.level + "</span></span>";
   $("sheet-personality").textContent =
-    a.class + " · " + a.archetype + " — " + a.personality + " · " +
-    regionName(world, a.regionId) + (a.awake ? "" : " (asleep)");
+    a.personality + " · " + regionName(world, a.regionId) + (a.awake ? "" : " · asleep") +
+    (a.backstory ? " · " + a.backstory : "");
   $("sheet-toggle").textContent = a.awake ? "Sleep" : "Wake";
-  const bondNames = bondsOf(a, world.config)
-    .map(id => { const b = agentById(world, id); return b ? b.name : null; })
-    .filter(Boolean).slice(0, 3);
-  const rivalNames = rivalsOf(a, world.config)
-    .map(id => { const b = agentById(world, id); return b ? b.name : null; })
-    .filter(Boolean).slice(0, 3);
-  const ties = (bondNames.length ? "Allied: " + bondNames.join(", ") + ". " : "") +
-    (rivalNames.length ? "At odds: " + rivalNames.join(", ") + "." : "");
-  $("sheet-rpg").innerHTML = rpgBlock(a) +
-    (ties ? '<div class="goal-line"><span class="glabel">TIES</span> ' + esc(ties) + "</div>" : "");
+  $("sheet-rpg").innerHTML = rpgBlock(a);
+  $("sheet-ties").innerHTML = tieRows(a);
+  $("sheet-carrying").innerHTML = carryingBlock(a) + preoccupationBlock(a);
   const thoughtEl = $("sheet-thought");
   const fresh = a.thought && (Date.now() - a.thoughtAt < THOUGHT_TTL_MS);
   if (!hasKey()) {
-    thoughtEl.innerHTML = '<span class="note">Asleep — add your API key in Admin to hear its thoughts.</span>';
+    thoughtEl.innerHTML = '<span class="note">No model attached, so there is no inner monologue to read — ' +
+      "but the record will tell you what " + esc(a.name) + " has actually been doing. Add a key in Admin " +
+      "to hear the voice.</span>";
   } else if (fresh) {
     thoughtEl.textContent = "\u201C" + a.thought + "\u201D";
   } else {
@@ -778,51 +1165,85 @@ function thoughtError(err) {
   return "Couldn't reach the mind: " + String(err && err.message || err).slice(0, 120);
 }
 
+/* ---- minds, grouped by where they actually are ---- */
 function renderAgents() {
   const list = $("agents-list");
   list.innerHTML = "";
-  livingAgents(world).forEach(a => {
-    const div = document.createElement("div");
-    div.className = "card agent-card";
-    div.innerHTML =
-      '<div class="ahead">' +
-      '<span class="orb glow-orb" style="border-color:' + esc(a.color) + ";box-shadow:0 0 12px " + esc(a.color) + '55">' + esc(a.icon) + "</span>" +
-      '<div class="ainfo"><div class="aname">' + esc(a.name) +
-      (a.epithet ? ' <span class="note">' + esc(a.epithet) + "</span>" : "") + "</div>" +
-      '<div class="aclass">' + esc(a.class) + " · " + esc(a.archetype) +
-      ' · <span class="lvl">Lv ' + a.level + "</span></div></div>" +
-      '<label class="switch"><input type="checkbox"' + (a.awake ? " checked" : "") + '><span class="slider"></span></label>' +
-      "</div>" +
-      rpgBlock(a) +
-      '<div class="goal-line"><span class="glabel">REGION</span> ' + esc(regionName(world, a.regionId)) + "</div>" +
-      '<div class="row card-btns">' +
-      '<button class="btn sm act-rename">Rename</button>' +
-      '<button class="btn sm danger act-retire">Retire</button>' +
-      "</div>";
-    div.querySelector("input").addEventListener("change", ev => {
-      a.awake = ev.target.checked;
-      if (a.awake) a.needs.energy = Math.max(a.needs.energy, 40);
-      save(); renderWorld();
-    });
-    div.querySelector(".act-rename").addEventListener("click", () => {
-      const name = prompt("Rename " + a.name + ":", a.name);
-      if (name && name.trim()) {
-        a.name = name.trim().slice(0, 24);
-        logEvent(world, { kind: "act", agentId: a.id, text: "The world learns a new name: " + a.name + ".", significance: 0.4, regionId: a.regionId });
-        save(); renderWorld();
-      }
-    });
-    div.querySelector(".act-retire").addEventListener("click", () => {
-      if (!confirm("Retire " + a.name + " from the world? This cannot be undone.")) return;
-      a.retired = true;
-      logEvent(world, { kind: "act", agentId: null, text: a.name + " retired from the world and walked beyond the map's edge.", significance: 0.5 });
-      delete chats[a.id];
-      if (ui.selectedId === a.id) ui.selectedId = null;
-      if (ui.chatId === a.id) { ui.chatId = null; showPicker(); }
-      save(); renderWorld();
-    });
-    list.appendChild(div);
+  const living = livingAgents(world);
+  const occ = regionOccupancy(world);
+  const yours = living.filter(a => a.userCreated).length;
+  $("minds-note").textContent = living.length + " minds in the world" +
+    (yours ? ", " + yours + " brought here by you" : "") +
+    ". Awake minds act every tick; sleeping ones still drift.";
+
+  for (const region of REGIONS) {
+    const here = occ[region.id] || [];
+    if (!here.length) continue;
+    const head = document.createElement("div");
+    head.className = "region-head";
+    head.innerHTML = "<span>" + esc(region.name) + "</span><em>" + here.length +
+      (here.length === 1 ? " mind" : " minds") + "</em>";
+    list.appendChild(head);
+    const blurb = document.createElement("p");
+    blurb.className = "region-blurb";
+    blurb.textContent = region.blurb;
+    list.appendChild(blurb);
+    here.forEach(a => list.appendChild(agentCard(a)));
+  }
+}
+
+function agentCard(a) {
+  const div = document.createElement("div");
+  div.className = "card agent-card" + (a.id === ui.selectedId ? " selected" : "");
+  const ties = tiesOf(a, 3);
+  const tieLine = ties.length
+    ? ties.map(({ other, edge }) =>
+        '<span class="chip">' + esc(other.icon) + " " + esc(other.name) + " · " +
+        esc(describeRelation(edge)) + "</span>").join("")
+    : '<span class="chip">no ties yet</span>';
+  div.innerHTML =
+    '<div class="ahead head-row">' +
+    '<span class="orb glow-orb" style="border-color:' + esc(a.color) + ";box-shadow:0 0 12px " + esc(a.color) + '55">' + esc(a.icon) + "</span>" +
+    '<div class="ainfo"><div class="aname">' + esc(a.name) +
+    (a.epithet ? ' <span class="note">' + esc(a.epithet) + "</span>" : "") +
+    (a.userCreated ? ' <span class="chip you">yours</span>' : "") + "</div>" +
+    '<div class="aclass">' + esc(a.class) + " · " + esc(a.archetype) +
+    ' · <span class="lvl">Lv ' + a.level + "</span> · " + esc(moodWord(a, tickNow())) + "</div></div>" +
+    '<label class="switch"><input type="checkbox"' + (a.awake ? " checked" : "") + '><span class="slider"></span></label>' +
+    "</div>" +
+    '<div class="doing">' + esc(doingLine(a)) + "</div>" +
+    '<div class="holders" style="margin-top:8px">' + tieLine + "</div>" +
+    '<div class="row card-btns">' +
+    '<button class="btn sm act-open">Dossier</button>' +
+    '<button class="btn sm act-rename">Rename</button>' +
+    '<button class="btn sm danger act-retire">Retire</button>' +
+    "</div>";
+  div.querySelector("input").addEventListener("change", ev => {
+    ev.stopPropagation();
+    a.awake = ev.target.checked;
+    if (a.awake) a.needs.energy = Math.max(a.needs.energy, 40);
+    save(); renderAll();
   });
+  div.querySelector(".head-row").addEventListener("click", () => openSheet(a.id));
+  div.querySelector(".act-open").addEventListener("click", () => openSheet(a.id));
+  div.querySelector(".act-rename").addEventListener("click", () => {
+    const name = prompt("Rename " + a.name + ":", a.name);
+    if (name && name.trim()) {
+      a.name = name.trim().slice(0, 24);
+      logEvent(world, { kind: "act", agentId: a.id, text: "The world learns a new name: " + a.name + ".", significance: 0.4, regionId: a.regionId });
+      save(); renderAll();
+    }
+  });
+  div.querySelector(".act-retire").addEventListener("click", () => {
+    if (!confirm("Retire " + a.name + " from the world? This cannot be undone.")) return;
+    a.retired = true;
+    logEvent(world, { kind: "act", agentId: null, text: a.name + " retired from the world and walked beyond the map's edge.", significance: 0.5 });
+    delete chats[a.id];
+    if (ui.selectedId === a.id) ui.selectedId = null;
+    if (ui.chatId === a.id) { ui.chatId = null; showPicker(); }
+    save(); renderAll();
+  });
+  return div;
 }
 
 /* ---------- create ---------- */
@@ -834,6 +1255,10 @@ function randomizeCreate() {
   $("new-backstory").value = BACKSTORIES[Math.floor(Math.random() * BACKSTORIES.length)];
   $("new-color").value = HUES[Math.floor(Math.random() * HUES.length)];
   $("new-icon").value = ICONS[Math.floor(Math.random() * ICONS.length)];
+  if (!$("new-name").value.trim()) {
+    const NAMES = ["Nova", "Ilya", "Kestrel", "Ora", "Bramble", "Vesper", "Tallow", "Muir", "Ash", "Lior", "Sparrow", "Corvid"];
+    $("new-name").value = NAMES[Math.floor(Math.random() * NAMES.length)];
+  }
 }
 function doCreate() {
   const name = $("new-name").value.trim().slice(0, 24) || "Nova";
@@ -856,9 +1281,11 @@ function doCreate() {
   a.userCreated = true;
   world.agents.push(a);
   logEvent(world, { kind: "act", agentId: a.id, text: a.name + " arrived in the world — a " + cls + ", " + persona.toLowerCase() + ".", significance: 0.5, regionId: a.regionId });
-  save(); renderWorld();
+  save(); renderAll();
   closeCreate();
   $("new-name").value = ""; $("new-backstory").value = "";
+  toast(esc(a.name) + " steps onto the map at the Crossroads. Nobody knows them yet — that is the interesting part.");
+  openSheet(a.id);
 }
 
 /* ---------- chat ---------- */
@@ -867,14 +1294,24 @@ function showPicker() {
   $("chat-view").classList.add("hidden");
   const pk = $("chat-picker");
   pk.innerHTML = "";
+  if (!hasKey()) {
+    const n = document.createElement("p");
+    n.className = "note";
+    n.style.margin = "0 4px 10px";
+    n.textContent = "Talking to a mind needs a model behind it. The world itself does not — add a key in " +
+      "Admin whenever you want to hear them answer.";
+    pk.appendChild(n);
+  }
   livingAgents(world).forEach(a => {
     const div = document.createElement("div");
     div.className = "card agent-row";
     div.style.cursor = "pointer";
+    const hist = chats[a.id] || [];
+    const last = hist.length ? hist[hist.length - 1].content : null;
     div.innerHTML =
       '<span class="orb glow-orb" style="border-color:' + esc(a.color) + ";box-shadow:0 0 12px " + esc(a.color) + '55">' + esc(a.icon) + "</span>" +
       '<div class="ainfo"><div class="aname">' + esc(a.name) + "</div>" +
-      '<div class="apers">' + (a.awake ? esc(a.personality) : "asleep") + "</div></div>";
+      '<div class="apers">' + esc(last ? last.slice(0, 70) : doingLine(a).slice(0, 70)) + "</div></div>";
     div.addEventListener("click", () => openChat(a.id));
     pk.appendChild(div);
   });
@@ -887,7 +1324,8 @@ function openChat(id) {
   $("chat-picker").classList.add("hidden");
   $("chat-view").classList.remove("hidden");
   $("chat-peer").innerHTML =
-    '<span style="color:' + esc(a.color) + '">' + esc(a.icon) + "</span> " + esc(a.name);
+    '<span style="color:' + esc(a.color) + '">' + esc(a.icon) + "</span> " + esc(a.name) +
+    ' <span class="note">· ' + esc(regionName(world, a.regionId)) + "</span>";
   renderChatLog();
 }
 function renderChatLog() {
@@ -904,7 +1342,7 @@ function renderChatLog() {
   if (!hasKey()) {
     const p = document.createElement("p");
     p.className = "note";
-    p.textContent = "Add your BluesMinds API key in Admin to talk with " + (a ? a.name : "this mind") + ".";
+    p.textContent = "Add a BluesMinds API key in Admin to talk with " + (a ? a.name : "this mind") + ".";
     log.appendChild(p);
   }
   log.scrollTop = log.scrollHeight;
@@ -934,31 +1372,64 @@ async function sendChat() {
 }
 
 /* ---------- admin ---------- */
+const SPEEDS = [
+  { secs: 180, label: "Chill", note: "a day every 2½ hours" },
+  { secs: 90, label: "Normal", note: "a day every 72 minutes" },
+  { secs: 45, label: "Brisk", note: "a day every half hour" },
+  { secs: 20, label: "Frantic", note: "a day every 16 minutes" }
+];
 function loadAdmin() {
   $("set-key").value = settings.apiKey || "";
   $("set-model").value = settings.model || "openai/gpt-oss-20b";
-  $("set-tick").value = settings.tickSeconds || 90;
+  renderSpeeds();
   renderAdminWorld();
+}
+function renderSpeeds() {
+  const row = $("speed-row");
+  row.innerHTML = "";
+  SPEEDS.forEach(s => {
+    const b = document.createElement("button");
+    b.className = "spd" + (Number(settings.tickSeconds) === s.secs ? " active" : "");
+    b.innerHTML = esc(s.label) + "<small>" + esc(s.note) + "</small>";
+    b.addEventListener("click", () => {
+      settings.tickSeconds = s.secs;
+      save(); armTick(); renderSpeeds();
+      $("speed-note").textContent = "Saved. A tick every " + s.secs + " seconds — " + s.note + ".";
+    });
+    row.appendChild(b);
+  });
+  $("speed-note").textContent = "Currently one tick every " + (settings.tickSeconds || 45) + " seconds. " +
+    "Half an hour of world time passes each tick, and the world only ticks while the app is open — " +
+    "time missed is paid back on the next launch.";
 }
 function saveAdmin() {
   settings.apiKey = $("set-key").value.trim();
   settings.model = $("set-model").value.trim() || "openai/gpt-oss-20b";
-  settings.tickSeconds = Math.max(15, parseInt($("set-tick").value, 10) || 90);
-  save(); armTick(); renderWorld();
+  save(); armTick(); renderAll();
   $("admin-status").textContent = hasKey()
-    ? "Saved. The minds are awake — first tick in ~" + settings.tickSeconds + "s, or press Tick now."
-    : "Saved. Add an API key to wake the minds.";
+    ? "Saved. " + (settings.model || "The model") + " now writes the world's biggest moments. First tick in ~" +
+      (settings.tickSeconds || 45) + "s, or press One tick."
+    : "Saved. The world keeps running on its own — no key needed.";
+}
+function advance(ticks) {
+  advanceOffline(ticks);
+  save(); mapFx.fxInit = false; renderAll();
+  toast("The world ran " + ticks + " ticks ahead — " + describeClock(world.clock) + ".");
 }
 function resetWorld() {
   if (!confirm("Reset the world? All minds, chats, and events return to the seed state.")) return;
   world = freshWorld();
   chats = {};
-  ui = { selectedId: null, chatId: null };
+  ui = { selectedId: null, chatId: null, record: ui.record };
   mapFx.fxInit = false;
   mapFx.ripples.length = 0;
   mapFx.wisps.length = 0;
-  save(); armTick(); renderWorld();
+  lastSeenAt = Date.now();
+  runTicks(world, OPENING_TICKS);
+  settleMoments(world.pending.slice());
+  save(); armTick(); renderAll();
   showPicker();
+  toast("A new world. Nine minds, no history, and " + OPENING_TICKS + " ticks already behind them.");
 }
 
 /* ---------- tabs / wiring ---------- */
@@ -967,28 +1438,103 @@ function switchTab(name) {
   document.querySelectorAll(".screen").forEach(s => s.classList.toggle("active", s.id === "screen-" + name));
   if (name === "messages" && !ui.chatId) showPicker();
   if (name === "admin") loadAdmin();
+  if (name === "record") renderRecord();
 }
 function renderAdminWorld() {
   const el = $("admin-world");
-  if (el) el.textContent =
-    "World seed " + world.seed + " · " + describeClock(world.clock) +
-    " · " + livingAgents(world).length + " minds, " + world.events.length + " events in the record.";
+  if (!el) return;
+  const stats = worldStats(world);
+  el.textContent = "World seed " + world.seed + " · " + describeClock(world.clock) + " · " +
+    stats.agents + " minds, " + world.events.length + " events in the record, " +
+    world.secrets.length + " secrets (" + stats.publicSecrets + " public).";
 }
-function renderWorld() {
-  renderStats(); renderMap(); noteMapFx(); renderFeed(); renderFullFeed(); renderAgents(); renderAdminWorld();
+function renderAll() {
+  renderNow(); renderStats(); renderMap(); noteMapFx(); renderFeed();
+  renderAgents(); renderAdminWorld();
+  // The record can be hundreds of cards long; there is no reason to rebuild it
+  // for a screen nobody is looking at. Opening the tab re-renders on demand.
+  if (document.querySelector("#screen-record.active")) renderRecord();
   if (ui.chatId && agentById(world, ui.chatId)) renderChatLog();
 }
 
+/* ---------- first run ---------- */
+function showWelcome(gaveHistory) {
+  $("welcome-card").querySelector("h3").textContent =
+    "Nine minds are living in " + worldNameFor(world.seed) + ".";
+  $("welcome-body").textContent = gaveHistory
+    ? "This world has already been running without you — two days of it, in the Chronicle. Minds " +
+      "wander, work at ambitions, gossip, keep secrets and fall out with each other. You are the " +
+      "keeper: tap anyone on the map to read their dossier, or open the Record to catch up on what " +
+      "you missed. No API key required; one just lets a language model write their biggest moments " +
+      "in their own voice."
+    : "Minds wander, work at ambitions, gossip, keep secrets and fall out with each other, and the " +
+      "world writes its own diary as the days close. Tap anyone on the map to read their dossier, or " +
+      "open the Record for the story so far. No API key required; one just lets a language model " +
+      "write their biggest moments in their own voice.";
+  $("welcome").classList.remove("hidden");
+  try { localStorage.setItem("agentsworld.welcomed", "1"); } catch (e) { /* private mode */ }
+}
+
+/**
+ * Pay back the time the app spent closed.
+ *
+ * The engine is pure and has no wall clock of its own, so "the world kept
+ * living" is not a lie told to the user — it is the same simulation, run
+ * forward, with the engine narrating every beat it would have narrated anyway.
+ * Beyond a few hours it stops being a catch-up and starts being a different
+ * story, so the cap keeps the world recognisable.
+ */
+function catchUp() {
+  const secs = Math.max(15, parseInt(settings.tickSeconds, 10) || 45);
+  const elapsed = Date.now() - lastSeenAt;
+  if (elapsed < secs * 1000) return 0;
+  const hours = elapsed / 3.6e6;
+  const missed = Math.floor(elapsed / (secs * 1000));
+  const ticks = Math.min(missed, CATCHUP_CAP_TICKS, Math.floor((CATCHUP_MAX_HOURS * 3600) / secs));
+  if (ticks < 2) return 0;
+  const before = world.clock.day;
+  advanceOffline(ticks);
+  mapFx.fxInit = false;
+  return { ticks, days: world.clock.day - before, hours: Math.round(hours * 10) / 10 };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  load();
+  const { fresh } = load();
   initCanvas();
+
+  // A brand-new world should not open as an empty map.
+  let seeded = 0;
+  if (fresh) {
+    const before = world.clock.day;
+    runTicks(world, OPENING_TICKS);
+    settleMoments(world.pending.slice());
+    seeded = world.clock.day - before;
+  } else {
+    const caught = catchUp();
+    if (caught) {
+      setTimeout(() => {
+        toast("While you were away the world kept going — " + caught.ticks + " ticks, " +
+          (caught.days > 0 ? caught.days + (caught.days === 1 ? " day" : " days") : caught.hours + " hours") +
+          " of it. Check the Chronicle.");
+      }, 900);
+    }
+  }
+  // Either way the world has moved, so the save has to catch up with it: a
+  // keeper who opens the app and immediately closes it should not lose the
+  // two days the world just lived.
+  save();
+
   startMapLoop();
+
   document.querySelectorAll(".tab").forEach(t =>
     t.addEventListener("click", () => switchTab(t.dataset.tab)));
+  document.querySelectorAll(".rtab").forEach(t =>
+    t.addEventListener("click", () => { ui.record = t.dataset.view; save(); renderRecord(); }));
   $("btn-create").addEventListener("click", openCreate);
   $("btn-randomize").addEventListener("click", randomizeCreate);
   $("btn-do-create").addEventListener("click", doCreate);
   $("btn-cancel-create").addEventListener("click", closeCreate);
+  $("more-feed").addEventListener("click", () => { switchTab("record"); ui.record = "feed"; renderRecord(); });
   $("sheet-backdrop").addEventListener("click", closeSheet);
   $("sheet-close").addEventListener("click", closeSheet);
   $("sheet-toggle").addEventListener("click", () => {
@@ -996,7 +1542,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (a) {
       a.awake = !a.awake;
       if (a.awake) a.needs.energy = Math.max(a.needs.energy, 40);
-      save(); closeSheet(); renderWorld();
+      save(); renderAll();
+      openSheet(a.id);
     }
   });
   $("sheet-chat").addEventListener("click", () => {
@@ -1008,8 +1555,33 @@ document.addEventListener("DOMContentLoaded", () => {
   $("chat-send").addEventListener("click", sendChat);
   $("chat-input").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
   $("btn-save-admin").addEventListener("click", saveAdmin);
-  $("btn-tick").addEventListener("click", () => tick(true));
+  $("btn-tick").addEventListener("click", () => tick(true).then(() => renderAll()));
+  $("btn-advance").addEventListener("click", () => advance(48));
+  $("btn-advance-week").addEventListener("click", () => advance(336));
   $("btn-reset").addEventListener("click", resetWorld);
-  renderWorld();
+  $("welcome-go").addEventListener("click", () => { $("welcome").classList.add("hidden"); });
+  $("welcome-fast").addEventListener("click", () => {
+    $("welcome").classList.add("hidden");
+    advance(336);
+  });
+
+  renderAll();
+  if (fresh || !welcomedBefore()) showWelcome(seeded > 0);
   armTick();
+  // Persist the moment we started looking, so the next launch knows the gap.
+  window.addEventListener("beforeunload", save);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
 });
+
+/** Only the very first launch ever gets the welcome card. */
+function welcomedBefore() {
+  try { return localStorage.getItem("agentsworld.welcomed") === "1"; } catch (e) { return true; }
+}
+
+/* ---------- #rrggbb + alpha → rgba() ---------- */
+function hexA(hex, a) {
+  const h = String(hex || "#8b5cf6").replace("#", "");
+  const v = h.length === 3 ? h.split("").map(c => c + c).join("") : h.padEnd(6, "0");
+  const n = parseInt(v.slice(0, 6), 16);
+  return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")";
+}
