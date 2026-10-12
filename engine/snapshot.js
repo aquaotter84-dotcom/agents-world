@@ -31,7 +31,11 @@ const PERSISTED = [
   "chronicle",
   "chronicleMark",
   "seq",
-  "flags"
+  "flags",
+  // Which narration lines have been used lately. Part of the world's state
+  // rather than the module's, so a resumed or forked world does not immediately
+  // start repeating lines the original had already spent.
+  "proseMemory"
 ];
 
 /**

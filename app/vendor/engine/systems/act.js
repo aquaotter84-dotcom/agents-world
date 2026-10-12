@@ -12,7 +12,7 @@
 
 import { clamp } from "../config.js";
 import { edgeToward } from "../model/relationships.js";
-import { agentById, regionName, secretTextFor, livingAgents } from "../model/world.js";
+import { agentById, regionName, secretClaimFor, livingAgents } from "../model/world.js";
 import { nextStepToward, unfamiliarRegions, solitaryRegions, sociableTarget } from "../model/regions.js";
 import { temperamentOverlap } from "../model/agent.js";
 import { recall } from "../model/memory.js";
@@ -387,7 +387,14 @@ function shareSecret(world, agent, target, secret, cfg) {
   if (world.rng.chance(cfg.social.gossipMutationChance)) fidelity -= cfg.social.gossipFidelityLoss;
   fidelity = clamp(fidelity, 0.1, 1);
 
-  const asTold = secretTextFor(secret, fidelity);
+  // How the telling is framed depends on how much of it survived the journey:
+  // firsthand, worn smooth, or down to a rumour with two sides.
+  const pool = fidelity >= 0.75 ? "spread_loud" : fidelity >= 0.4 ? "spread_soft" : "spread_garbled";
+  const asTold = phrase(world, agent, pool, {
+    other: target.name,
+    region: regionName(world, agent.regionId),
+    claim: secretClaimFor(secret)
+  });
 
   /** @type {EffectOp[]} */
   const ops = [

@@ -294,7 +294,7 @@ export function resolveMoment(world, momentId, answer) {
  * @param {World} world
  * @param {Moment} moment
  * @param {Agent} agent
- * @param {{ id: string, ops: import("./systems/effects.js").EffectOp[], label?: string }} option
+ * @param {import("./model/world.js").MomentOption} option
  * @param {string|null} prose
  */
 function applyMomentOption(world, moment, agent, option, prose) {
@@ -302,7 +302,10 @@ function applyMomentOption(world, moment, agent, option, prose) {
   // A model's prose becomes the world's record of the beat. Without one, the
   // engine narrates it itself — an offline world should still read as a story
   // rather than as a list of decisions somebody made.
-  const text = prose || momentLine(world, agent, moment, { id: option.id, label: option.label || option.id }, id => agentById(world, id));
+  // The whole option travels, not just an id and a label: options that carry
+  // their own narration (a new goal's line, which is generated from the goal
+  // tables and so cannot be keyed on) need `prose` and `data` to arrive intact.
+  const text = prose || momentLine(world, agent, moment, option, id => agentById(world, id));
   ops.push({
     op: "event",
     agent: agent.id,
@@ -387,7 +390,11 @@ function maybeChronicle(world, tick) {
 
   const parts = notable.map(e => {
     const who = e.agentId ? agentById(world, e.agentId) : null;
-    return `${who ? who.name + ": " : ""}${e.text}`;
+    // Most lines already open with the mind that acted — "Pim said the whole
+    // thing out loud". A chronicle is a summary, not a transcript, so only the
+    // lines that would otherwise read as anonymous get attributed.
+    if (!who || e.text.startsWith(who.name)) return e.text;
+    return `${who.name}: ${e.text}`;
   });
 
   let summary;
