@@ -145,6 +145,42 @@ async function storedWorldWithCharter() {
   return { world: JSON.stringify(worldJson), settings: {}, chats: {}, chatRoles: {}, ui: {}, keeper: { marks: [], xp: 0 }, lastSeenAt: Date.now() };
 }
 
+/**
+ * A stored world that has lost someone: one funeral still coming, one grave
+ * already filled, with a living mourner and a living heir so the record's
+ * chips have somewhere to go.
+ */
+async function storedWorldWithMourning() {
+  const { createWorld } = await import("../engine/model/world.js");
+  const { serializeWorld } = await import("../engine/snapshot.js");
+  const world = createWorld({ seed: 4243 });
+  const worldJson = JSON.parse(serializeWorld(world));
+  const a = worldJson.agents[0];
+  const b = worldJson.agents[1];
+  const c = worldJson.agents[2];
+  worldJson.mourning = {
+    funerals: [
+      {
+        id: "fun1", agentId: "gone1", name: "Adah", epithet: "the patient", className: "mystic", level: 3,
+        regionId: a.regionId, calledTick: 10, holdTick: 22, held: false, mourners: [], heirs: [], inherited: [],
+        deeds: "the world's Wallwright, laid 24 into the North Wall"
+      }
+    ],
+    memorials: [
+      {
+        id: "mem1", agentId: "gone2", name: "Ren", epithet: "the quiet", kind: "death", regionId: a.regionId,
+        tick: 30, day: 2, mourners: [b.id], heirs: [c.id], inherited: [{ heirId: c.id, aboutId: b.id }],
+        text: "Ren was buried at the Crossroads on day 2, with " + b.name + " standing by. They laid 30 into the North Wall.",
+        deeds: "laid 30 into the North Wall"
+      }
+    ]
+  };
+  return {
+    world: JSON.stringify(worldJson), settings: {}, chats: {}, chatRoles: {}, ui: {},
+    keeper: { marks: [], xp: 0 }, lastSeenAt: Date.now(), mourner: b.name
+  };
+}
+
 /* ------------------------------------------------------------------ */
 
 test("the board tells the keeper what a tap-and-hold will get them", async () => {
@@ -348,6 +384,54 @@ test("the board reports what the atlas shows, from the world alone", async () =>
   assert.equal(projectPalette(world).complete, true);
 
   assert.match(describeBoard(world), /the wall at/);
+});
+
+test("the mourning chronicle is a page in the record, not a line in the feed", async () => {
+  const saved = await storedWorldWithMourning();
+  const { document: doc, restore } = await bootApp({ savedState: saved });
+  try {
+    const tabs = $$(doc, "#record-tabs .rtab");
+    tabs.find(t => t.dataset.view === "chronicle").click();
+    const pane = text(doc, "record-pane");
+    assert.match(pane, /In memoriam/, "the record keeps the dead");
+    assert.match(pane, /A funeral called/, "a gathering still coming is announced");
+    assert.match(pane, /Adah/, "with the mind it is for");
+    assert.match(pane, /GATHERING|gathering/i);
+    assert.match(pane, /Ren/, "and the grave already filled is kept");
+    assert.match(pane, /carries what Ren had against/, "including the quarrel that outlived them");
+
+    // A mourner who is still alive is touchable: the chip opens their dossier.
+    const chip = $(doc, "#record-pane .mem-mind");
+    assert.ok(chip, "the living mourner is a chip");
+    /** @type {HTMLElement} */ (chip).click();
+    assert.ok(!$(doc, "#mind-sheet").classList.contains("hidden"), "tapping the mourner opens them");
+  } finally { restore(); }
+});
+
+test("the keeper's own retire button does not make a quiet despawn", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    // jsdom will not run a modal, so the confirmation is simply granted.
+    const realConfirm = /** @type {any} */ (globalThis).confirm;
+    /** @type {any} */ (globalThis).confirm = () => true;
+    try {
+      const tabs = $$(doc, "#tabbar .tab");
+      tabs.find(t => t.dataset.tab === "minds").click();
+      const card = $(doc, "screen-minds .agent-card") || $(doc, ".agent-card");
+      assert.ok(card, "the cast is listed");
+      const name = /** @type {HTMLElement} */ (card.querySelector(".aname")).textContent.trim().split(/\s+/)[0];
+      /** @type {HTMLElement} */ (card.querySelector(".act-retire")).click();
+
+      // The world keeps a memorial, and the record says so.
+      const record = $$(doc, "#record-tabs .rtab").find(t => t.dataset.view === "chronicle");
+      record?.click();
+      const pane = text(doc, "record-pane");
+      assert.match(pane, /In memoriam/, "the mourning chronicle has them");
+      assert.match(pane, new RegExp(name), "under their own name");
+    } finally {
+      /** @type {any} */ (globalThis).confirm = realConfirm;
+    }
+  } finally { restore(); }
 });
 
 test("the charter tab is the board's counterpart, and a ruling moves the world", async () => {

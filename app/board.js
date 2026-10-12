@@ -13,7 +13,7 @@
  * rather than a matter of care.
  */
 
-import { feudStage, wantSummary, WANT_LABELS, meterWord } from "./vendor/engine/index.js";
+import { feudStage, wantSummary, WANT_LABELS, meterWord, pendingFunerals } from "./vendor/engine/index.js";
 
 /**
  * @typedef {import("./vendor/engine/model/world.js").World} World
@@ -162,6 +162,48 @@ export function projectPalette(world) {
 }
 
 /**
+ * What the world is burying, and where the board should say so.
+ *
+ * A funeral that has been called but not yet held is a gathering still coming:
+ * the mark pulses where the world will stand. Once the grave is filled the mark
+ * becomes a cairn that stays for a while — the board remembers, so a death is
+ * never a thing that happened off-screen.
+ *
+ * @param {World} world
+ * @returns {{kind: "funeral"|"grave", agentId: string, name: string, regionId: string, at: number, mourners: number}[]}
+ */
+export function mourningMarks(world) {
+  const mourning = world.mourning;
+  if (!mourning || !mourning.funerals) return [];
+  const tick = world.clock.tick;
+  const window = world.config?.mourning?.graveWindowTicks ?? 144;
+  /** @type {ReturnType<typeof mourningMarks>} */
+  const out = [];
+  for (const funeral of mourning.funerals) {
+    if (!funeral.held) {
+      out.push({
+        kind: "funeral",
+        agentId: funeral.agentId,
+        name: funeral.name,
+        regionId: funeral.regionId,
+        at: funeral.holdTick,
+        mourners: 0
+      });
+    } else if (tick - (funeral.heldTick ?? 0) <= window) {
+      out.push({
+        kind: "grave",
+        agentId: funeral.agentId,
+        name: funeral.name,
+        regionId: funeral.regionId,
+        at: funeral.heldTick ?? 0,
+        mourners: (funeral.mourners || []).length
+      });
+    }
+  }
+  return out;
+}
+
+/**
  * The keeper's own board: three rings, one per meter.
  *
  * Harmony, prosperity and legacy are the keeper's score, and a score that only
@@ -206,12 +248,19 @@ export function describeBoard(world) {
   const palette = projectPalette(world);
   const ring = keeperRing(world);
   const want = ring.meters.map(m => `${m.label.toLowerCase()} ${Math.round(m.value)} (${m.word})`).join(", ");
+  const marks = mourningMarks(world);
+  const called = marks.filter(m => m.kind === "funeral");
+  const graves = (world.mourning?.memorials || []).filter(m => m.kind === "death").length;
+  const mourningLine = called.length
+    ? `a funeral called for ${called[0].name} at ${called[0].regionId}`
+    : `the world has buried ${graves}`;
   return [
     `${counts.petition} petition${counts.petition === 1 ? "" : "s"} waiting`,
     `${counts.dilemma} dilemma${counts.dilemma === 1 ? "" : "s"} waiting`,
     `${counts.whisper} whisper${counts.whisper === 1 ? "" : "s"} unheard`,
     `${feudArcs(world).length} feud arc${feudArcs(world).length === 1 ? "" : "s"}`,
     `the wall at ${Math.round(palette.progress)}%${palette.complete ? " and standing" : ""}`,
+    mourningLine,
     `the keeper's want: ${want}${ring.fallen ? " (the world has gone quiet)" : ""}`
   ].join(" · ");
 }

@@ -209,6 +209,41 @@ export const DEFAULT_CONFIG = {
     deathChance: 0.25
   },
 
+  mourning: {
+    /**
+     * Death matters, and so does absence.
+     *
+     * A death calls a gathering; the world has `callDelayTicks` to hear about
+     * it, which is also long enough for the keeper to see it coming on the
+     * board. Attendance is read off the dead's own ties: `attendThreshold` is
+     * how close a mind must have stood to come on their own account, and the
+     * `minMourners` closest come regardless, because a world that lets a
+     * funeral go unattended is not a world anybody would want to keep.
+     *
+     * Grudges inherit. A heir is a real bond — `heirAffinityMin` — and takes
+     * `inheritFactor` of the dead's resentment onto their own edge, where the
+     * feud system picks it up like any other quarrel. Below `inheritMin` the
+     * grievance is too small to survive the person holding it.
+     */
+    enabled: true,
+    callDelayTicks: 8,
+    attendThreshold: 30,
+    minMourners: 2,
+    maxMourners: 6,
+    griefTicks: 48,
+    griefConnection: 6,
+    heirAffinityMin: 30,
+    maxHeirs: 2,
+    /** How many of the dead's quarrels can find a new pair of hands. */
+    maxInherit: 2,
+    inheritFactor: 0.55,
+    inheritMin: 12,
+    inheritFearFactor: 0.3,
+    inheritFamiliarity: 4,
+    /** How long a fresh grave is drawn on the board. */
+    graveWindowTicks: 144
+  },
+
   want: {
     /**
      * The keeper's own score: harmony, prosperity, legacy.
@@ -236,6 +271,9 @@ export const DEFAULT_CONFIG = {
     harmonyPerRivalry: 5,
     harmonyPerVendetta: 9,
     harmonyPerLonely: 4.5,
+    /** A funeral just held is the world standing together at real cost. */
+    harmonyPerGathering: 4,
+    gatheringWindowTicks: 24,
 
     prosperityBase: 22,
     prosperityPerWallPoint: 0.3,
@@ -257,6 +295,10 @@ export const DEFAULT_CONFIG = {
     legacyPerBrokenRole: 3,
     legacyPerPrecedent: 1.1,
     legacyPerDay: 0.5,
+    /** A grave is a thing the world remembers, and memory is legacy. */
+    legacyPerGrave: 3,
+    /** A mind that simply left is remembered too, at half a grave's weight. */
+    legacyPerDeparture: 2,
     legacyForWallRaised: 10,
 
     /**
@@ -295,7 +337,11 @@ export const DEFAULT_CONFIG = {
       shame: { prosperity: 2, harmony: -1 },
       let_it_ride: { harmony: -1 },
       whisper: { harmony: -3, legacy: 2 },
-      wall_raised: { prosperity: 12, legacy: 6, harmony: 6 }
+      wall_raised: { prosperity: 12, legacy: 6, harmony: 6 },
+      // Not keeper acts, but they move the same meters through the same choke
+      // point, so a death is never invisible in the keeper's ledger either.
+      funeral: { harmony: 2, legacy: 3 },
+      departure: { legacy: 1 }
     }
   },
 

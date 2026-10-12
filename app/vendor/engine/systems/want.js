@@ -6,8 +6,8 @@
  *   1. The world is read. Harmony, prosperity and legacy are *measured* from
  *      the state the engine already keeps — mutual bonds, feud stages, lonely
  *      minds, wall progress, unrepaid favours, enacted laws, roles, chronicle
- *      days — so a meter can never drift away from what is actually true about
- *      the world.
+ *      days, the graves the world keeps — so a meter can never drift away from
+ *      what is actually true about the world.
  *
  *   2. The meters follow that reading. Slowly, at a bounded rate per tick, so
  *      a change is visible as a movement rather than a jump, and so a keeper
@@ -77,6 +77,10 @@ export function wantReading(world) {
     }
   }
   const lonely = living.filter(a => a.needs.connection < cfg.lonelyThreshold).length;
+  // A funeral just held is the world standing together at real cost; the
+  // harmony it produces is short-lived, but it is real.
+  const mourning = world.mourning || { funerals: [], memorials: [] };
+  const gatherings = mourning.funerals.filter(f => f.held && tick - (f.heldTick ?? -9999) <= cfg.gatheringWindowTicks).length;
   const quiet = quietState(world);
   const harmony = clamp(
     cfg.harmonyBase
@@ -84,6 +88,7 @@ export function wantReading(world) {
       - rivalries * cfg.harmonyPerRivalry
       - vendettas * cfg.harmonyPerVendetta
       - lonely * cfg.harmonyPerLonely
+      + gatherings * cfg.harmonyPerGathering
       - quiet.penalty,
     0,
     100
@@ -120,6 +125,8 @@ export function wantReading(world) {
   const roles = (charter?.roles || []).filter(role => byId.has(role.holderId)).length;
   const brokenRoles = (charter?.roles || []).filter(role => !byId.has(role.holderId)).length;
   const precedents = charter?.precedents.length ?? 0;
+  const graves = mourning.memorials.filter(m => m.kind === "death").length;
+  const remembered = mourning.memorials.filter(m => m.kind === "departure").length;
   const legacy = clamp(
     cfg.legacyBase
       + Math.min(rules * cfg.legacyPerRule, cfg.legacyRuleCap)
@@ -127,6 +134,8 @@ export function wantReading(world) {
       - brokenRoles * cfg.legacyPerBrokenRole
       + Math.min(precedents, 10) * cfg.legacyPerPrecedent
       + Math.min(world.chronicle.length, 30) * cfg.legacyPerDay
+      + Math.min(graves, 5) * cfg.legacyPerGrave
+      + Math.min(remembered, 8) * cfg.legacyPerDeparture
       + (project && project.status === "complete" ? cfg.legacyForWallRaised : 0),
     0,
     100
@@ -136,7 +145,7 @@ export function wantReading(world) {
     harmony,
     prosperity,
     legacy,
-    terms: { bonds, rivalries, vendettas, lonely, wall, hands, favours, interference, owed, rules, roles, precedents, quiet }
+    terms: { bonds, rivalries, vendettas, lonely, gatherings, wall, hands, favours, interference, owed, rules, roles, precedents, graves, remembered, quiet }
   };
 }
 

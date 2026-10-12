@@ -15,6 +15,7 @@ import { makeIdFactory } from "./model/world.js";
 import { createNorthWallProject } from "./model/projects.js";
 import { normalizeCharter } from "./model/charter.js";
 import { normalizeWant } from "./model/want.js";
+import { normalizeMourning } from "./model/mourning.js";
 import { createCognitionState, createProposalState } from "./model/agent.js";
 
 /**
@@ -36,6 +37,8 @@ const PERSISTED = [
   // a keeper who comes back after a night away should find the meters where
   // the world left them, not reset to a fresh 50.
   "want",
+  // Funerals still coming and the memorials of everyone the world has lost.
+  "mourning",
   "pending",
   "resolved",
   "chronicle",
@@ -97,6 +100,8 @@ export function deserializeWorld(input) {
   // A world saved before the keeper's want existed starts with a level reading
   // and an empty ledger, which is the honest thing to show.
   world.want = normalizeWant(data.want);
+  // A world saved before anyone had died has an empty mourning chronicle.
+  world.mourning = normalizeMourning(data.mourning);
   const pilotCount = Math.max(0, Math.floor(world.config.cognition.pilotCount));
   const interval = Math.max(1, world.config.cognition.planIntervalTicks);
   for (let index = 0; index < world.agents.length; index += 1) {

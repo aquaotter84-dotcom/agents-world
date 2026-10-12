@@ -29,6 +29,7 @@ import { applyEffects } from "./systems/effects.js";
 import { settleNeeds, checkCollapse } from "./systems/needs.js";
 import { settleRelations, settleProximity, hatchSecrets } from "./systems/social.js";
 import { settleTurnover } from "./systems/turnover.js";
+import { settleMourning } from "./systems/mourning.js";
 import { settleRituals } from "./systems/rituals.js";
 import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
@@ -191,6 +192,10 @@ export function step(world) {
   settleProximity(world);
   hatchSecrets(world);
   settleTurnover(world);
+  // A death this tick is buried a little later, and a gathering that has been
+  // called is held here — before the feuds are tracked, so a quarrel that has
+  // just changed hands is part of this tick's world.
+  settleMourning(world);
   settleRituals(world);
   trackFeuds(world);
   settleCharter(world);

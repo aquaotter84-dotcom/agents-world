@@ -19,6 +19,7 @@ import { livingAgents, regionName } from "../model/world.js";
 import { logEvent } from "../model/events.js";
 import { phrase } from "../decision/prose.js";
 import { WANDERERS, BACKSTORIES } from "../content.js";
+import { callFuneral, mournDeparture } from "./mourning.js";
 
 /**
  * Minds the world may not take on its own: the seed cast and the keeper's own
@@ -152,5 +153,11 @@ export function depart(world, living) {
     significance: died ? 0.85 : 0.6,
     regionId: agent.regionId
   });
+
+  // Nobody despawns quietly. A death calls a gathering the world attends and
+  // leaves a memorial behind; a departure is written down before the map
+  // forgets the name.
+  if (died) callFuneral(world, agent);
+  else mournDeparture(world, agent);
   return agent;
 }

@@ -31,7 +31,8 @@ import {
   levelProgress, pressingNeed,
   ruleOnPetition, resolveDilemma, actOnWhisper, describeRule, influenceWord,
   RULE_KINDS, precedentFor, feudStage,
-  wantSummary, wantLog, WANT_LABELS, wantVerdict
+  wantSummary, wantLog, WANT_LABELS, wantVerdict,
+  pendingFunerals, recentMemorials, mournDeparture
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -41,7 +42,7 @@ import { migrateV1Save } from "./migrate.js";
 import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
-import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing } from "./board.js";
+import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing, mourningMarks } from "./board.js";
 
 const STORE_KEY = "agentsworld.v2";
 /**
@@ -467,7 +468,7 @@ const KIND_TONE = {
   secret: "violet", confide: "violet",
   world: "ember", chronicle: "ember",
   favour: "ember", project: "gold",
-  arrival: "gold", departure: "mist",
+  arrival: "gold", departure: "mist", mourning: "violet",
   ritual: "violet",
   gossip: "mist", contact: "mist"
 };
@@ -902,9 +903,16 @@ function renderRecord() {
     return;
   }
   if (ui.record === "chronicle") {
+    // The mourning chronicle comes first when there is one: what the world has
+    // lost is the part of its history a keeper should not have to go looking
+    // for. Burials, the gatherings still coming, and who took up what.
+    renderMemoriam(pane);
     if (!world.chronicle.length) {
-      pane.innerHTML = '<p class="note">No day has closed yet. The first entry is written at the end of ' +
-        "Day 1 — a summary of everything the world decided worth remembering.</p>";
+      const empty = document.createElement("p");
+      empty.className = "note";
+      empty.textContent = "No day has closed yet. The first entry is written at the end of " +
+        "Day 1 — a summary of everything the world decided worth remembering.";
+      pane.appendChild(empty);
       return;
     }
     world.chronicle.slice().reverse().forEach(day => {
@@ -980,6 +988,68 @@ function renderRecord() {
     p.style.textAlign = "center";
     p.textContent = "…and " + (world.events.length - shown.length) + " older lines in the record.";
     pane.appendChild(p);
+  }
+}
+
+/**
+ * The mourning chronicle: funerals still coming, and the memorials of every
+ * mind the world has lost. A death is meant to be touchable in the record, so
+ * this is a real page rather than a line in the feed — what they did, who
+ * stood at the grave, and which of their quarrels is still walking around.
+ * @param {HTMLElement} pane
+ */
+function renderMemoriam(pane) {
+  const mourning = world.mourning;
+  if (!mourning) return;
+  const called = pendingFunerals(mourning);
+  const memorials = recentMemorials(mourning, 12);
+  if (!called.length && !memorials.length) return;
+
+  const head = document.createElement("p");
+  head.className = "eyebrow section-gap";
+  head.textContent = "In memoriam";
+  pane.appendChild(head);
+
+  for (const funeral of called.slice().reverse()) {
+    const card = document.createElement("div");
+    card.className = "card mem-card memorial-coming";
+    card.innerHTML =
+      '<p class="eyebrow">A funeral called</p>' +
+      '<div class="mem-name">' + esc(funeral.name) + (funeral.epithet ? " " + esc(funeral.epithet) : "") + "</div>" +
+      '<p class="mem-text">The world is gathering at ' + esc(regionName(world, funeral.regionId)) +
+      ". They were " + esc(funeral.className) + (funeral.level ? ", level " + funeral.level : "") + ", and they " +
+      esc(funeral.deeds) + ".</p>" +
+      '<p class="note">Called on Day ' + dayOfTick(funeral.calledTick) + " — the board shows the gathering until it happens.</p>";
+    pane.appendChild(card);
+  }
+
+  for (const memorial of memorials) {
+    const card = document.createElement("div");
+    card.className = "card mem-card " + (memorial.kind === "death" ? "memorial-death" : "memorial-departure");
+    const mourners = memorial.mourners
+      .map(id => {
+        const mind = agentById(world, id);
+        if (!mind) return "";
+        const live = mind.retired ? "" : " mem-mind tappable";
+        return '<span class="mem-chip' + live + '"' + (mind.retired ? "" : ' data-mind="' + esc(mind.id) + '"') + ">" +
+          esc(mind.icon) + " " + esc(mind.name) + "</span>";
+      })
+      .join("");
+    const heirs = (memorial.inherited || []).map(pass => {
+      const heir = agentById(world, pass.heirId);
+      const about = agentById(world, pass.aboutId);
+      if (!heir || !about) return "";
+      return '<li class="mem-heir">' + esc(heir.name) + " carries what " + esc(memorial.name) +
+        " had against " + esc(about.name) + ".</li>";
+    }).join("");
+    const head = memorial.kind === "death" ? "Buried" : "Gone from the map";
+    card.innerHTML =
+      '<p class="eyebrow">' + head + " · Day " + memorial.day + "</p>" +
+      '<div class="mem-name">' + esc(memorial.name) + (memorial.epithet ? " " + esc(memorial.epithet) : "") + "</div>" +
+      '<p class="mem-text">' + esc(memorial.text) + "</p>" +
+      (mourners ? '<div class="mem-chips">' + mourners + "</div>" : "") +
+      (heirs ? '<ul class="mem-heirs">' + heirs + "</ul>" : "");
+    pane.appendChild(card);
   }
 }
 
@@ -1258,7 +1328,8 @@ const MOOD_COLOR = {
   lonely:     "#a78bfa",
   bitter:     "#c084fc",
   adrift:     "#5b7fa8",
-  exhausted:  "#b45454"
+  exhausted:  "#b45454",
+  grieving:   "#b8b2c4"
 };
 
 const mapFx = {
@@ -1784,6 +1855,57 @@ function drawBoardSigils(g, t) {
  * @param {CanvasRenderingContext2D} g
  * @param {number} t
  */
+/**
+ * What the world is burying.
+ *
+ * A funeral that has been called draws as a ring of small marks around a mound
+ * with a candle over it — the world gathering, still coming. A grave the world
+ * has just filled draws as a cairn: three stones, no pulse, because it is
+ * finished. Both read at a glance and both are tappable; a tap opens the
+ * mourning chronicle, where the same person is written down.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawMourning(g, t) {
+  for (const mark of mourningMarks(world)) {
+    const at = regionXY(mark.regionId, -34);
+    if (!at) continue;
+    const pulse = 0.5 + 0.5 * Math.sin(t * 0.002);
+    g.save();
+    if (mark.kind === "funeral") {
+      g.strokeStyle = "rgba(196,170,240,0.5)";
+      g.lineWidth = 1.2;
+      g.beginPath(); g.arc(at.x, at.y, 13, 0, Math.PI * 2); g.stroke();
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + t * 0.0004;
+        g.fillStyle = "rgba(232,224,208," + (0.3 + 0.4 * pulse).toFixed(2) + ")";
+        g.beginPath(); g.arc(at.x + Math.cos(a) * 13, at.y + Math.sin(a) * 13, 1.6, 0, Math.PI * 2); g.fill();
+      }
+      g.strokeStyle = "rgba(180,170,200,0.9)";
+      g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(at.x - 6, at.y + 3); g.quadraticCurveTo(at.x, at.y - 6, at.x + 6, at.y + 3); g.stroke();
+      g.fillStyle = "rgba(251,191,36," + (0.45 + 0.45 * pulse).toFixed(2) + ")";
+      g.beginPath(); g.arc(at.x, at.y - 10, 2.2, 0, Math.PI * 2); g.fill();
+      g.font = "700 8px system-ui";
+      g.textAlign = "center";
+      g.fillStyle = "rgba(226,214,240,0.85)";
+      g.fillText("GATHERING", at.x, at.y + 22);
+    } else {
+      g.fillStyle = "rgba(150,146,158,0.85)";
+      g.beginPath(); g.ellipse(at.x, at.y + 4, 7, 2.5, 0, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "rgba(176,170,182,0.9)";
+      g.beginPath(); g.ellipse(at.x, at.y + 0.5, 4.6, 2, 0, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.ellipse(at.x, at.y - 2.6, 2.8, 1.7, 0, 0, Math.PI * 2); g.fill();
+      g.font = "700 8px system-ui";
+      g.textAlign = "center";
+      g.fillStyle = "rgba(198,192,206,0.72)";
+      g.fillText(mark.name.toUpperCase(), at.x, at.y + 14);
+    }
+    g.restore();
+    mapFx.sigils.push({ kind: mark.kind, id: mark.agentId, x: at.x, y: at.y, agentId: mark.agentId });
+  }
+}
+
 function drawConstellations(g, t) {
   const pos = new Map(livingAgents(world).map(a => [a.id, orbXY(a, t)]));
   for (const thread of constellations(world)) {
@@ -1922,6 +2044,7 @@ function drawMapFrame(t) {
   }
   // what is waiting on the keeper, drawn last so it is never buried
   drawBoardSigils(g, t);
+  drawMourning(g, t);
   drawKeeperRing(g, t);
   // ripples
   fx.ripples = fx.ripples.filter(rp => t - rp.t0 < 900);
@@ -2061,6 +2184,12 @@ function initCanvas() {
     if (hit.kind === "mind") openSheet(hit.id);
     else if (hit.kind === "want") {
       ui.record = "keeper";
+      save();
+      switchTab("record");
+      renderRecord();
+    }
+    else if (hit.kind === "funeral" || hit.kind === "grave") {
+      ui.record = "chronicle";
       save();
       switchTab("record");
       renderRecord();
@@ -2457,6 +2586,9 @@ function agentCard(a) {
     if (!confirm("Retire " + a.name + " from the world? This cannot be undone.")) return;
     a.retired = true;
     logEvent(world, { kind: "act", agentId: null, text: a.name + " retired from the world and walked beyond the map's edge.", significance: 0.5 });
+    // Even the keeper's own hand does not produce a quiet despawn: the world
+    // notes the absence and the memorial goes into the mourning chronicle.
+    mournDeparture(world, a);
     delete chats[a.id];
     if (ui.selectedId === a.id) ui.selectedId = null;
     if (ui.chatId === a.id) { ui.chatId = null; showPicker(); }
@@ -2924,6 +3056,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       save();
       renderRecord();
       renderWant();
+      return;
+    }
+
+    const memorialMind = target?.closest(".mem-mind");
+    if (memorialMind) {
+      openSheet(/** @type {any} */ (memorialMind).dataset.mind);
       return;
     }
 
