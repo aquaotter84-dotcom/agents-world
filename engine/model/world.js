@@ -54,6 +54,9 @@ import { createNorthWallProject } from "./projects.js";
  * @property {boolean} night
  * @property {string} goal
  * @property {number} goalProgress
+ * @property {string} [goalKind]
+ * @property {boolean} [atProjectSite]
+ * @property {string[]} [availableMethods]  Approaches the engine can resolve from here.
  * @property {string[]} memories
  * @property {string} [memorySummary]       Persistent private cognition summary.
  * @property {string[]} [privateBeliefs]
@@ -91,7 +94,7 @@ import { createNorthWallProject } from "./projects.js";
  * @typedef {object} Moment
  * @property {string} id
  * @property {number} tick
- * @property {string} kind        decision | dialogue | reflection | confrontation | betrayal | confession | declaration | cognition
+ * @property {string} kind        decision | dialogue | reflection | confrontation | betrayal | confession | declaration | cognition | goal_approach
  * @property {string} agentId
  * @property {string[]} participants
  * @property {number} significance
@@ -106,6 +109,10 @@ import { createNorthWallProject } from "./projects.js";
  * @property {string} [planAction]
  * @property {boolean} [planAccepted]
  * @property {string} [planValidation]
+ * @property {string} [approachText]      A mind's own words for how it meant to pursue its goal.
+ * @property {string} [approachMethod]    The validated verb the engine resolved it as.
+ * @property {boolean} [approachAccepted]
+ * @property {string} [approachValidation]
  * @property {MomentOption[]} options
  */
 

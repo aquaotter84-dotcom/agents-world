@@ -22,6 +22,7 @@ import { advance, describeClock } from "./clock.js";
 import { generateIntents } from "./decision/intents.js";
 import { buildMoment, isMomentWorthy } from "./decision/moments.js";
 import { resolveIntent, chooseDefaultOption } from "./systems/act.js";
+import { buildGoalApproachMoment, proposalEligible, resolveApproach, validateApproach } from "./decision/proposals.js";
 import { applyEffects } from "./systems/effects.js";
 import { settleNeeds, checkCollapse } from "./systems/needs.js";
 import { settleRelations, settleProximity, hatchSecrets } from "./systems/social.js";
@@ -119,6 +120,12 @@ export function step(world) {
     const ranked = generateIntents(world, agent);
     const intent = ranked[0];
     if (!intent) continue;
+    // When a mind is working toward its own goal, the model gets to propose how
+    // it goes about it — subject to the same budget as every other moment.
+    if (intent.kind === "pursue_goal" && proposalEligible(world, agent, tick)) {
+      planCandidates.push({ agent, moment: buildGoalApproachMoment(world, agent) });
+      continue;
+    }
     decisions.push({ agent, intent, ranked });
   }
 
@@ -147,6 +154,9 @@ export function step(world) {
     if (moment.kind === "cognition") {
       agent.cognition.lastPlanTick = tick;
       agent.cognition.nextPlanTick = tick + cfg.cognition.planIntervalTicks;
+    }
+    if (moment.kind === "goal_approach") {
+      agent.proposal.nextTick = tick + cfg.proposals.intervalTicks;
     }
   }
 
@@ -328,6 +338,8 @@ export function expireMoments(world) {
     if (agent) {
       if (moment.kind === "cognition") {
         resolveCognitionMoment(world, moment, agent, {}, true);
+      } else if (moment.kind === "goal_approach") {
+        resolveGoalApproachMoment(world, moment, agent, {}, true);
       } else {
         const option = chooseDefaultOption(world, agent, moment);
         applyMomentOption(world, moment, agent, option, null);
@@ -370,7 +382,8 @@ function rememberResolved(world, moment) {
  * @param {{
  *   optionId?: string, prose?: string, thought?: string, goal?: string, goalKind?: string,
  *   action?: string, target?: string, about?: string, plan?: string, priority?: string,
- *   belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string
+ *   belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string,
+ *   approach?: string, method?: string
  * }} answer
  * @returns {{ ok: boolean, reason?: string, events: WorldEvent[], optionId?: string }}
  */
@@ -387,6 +400,12 @@ export function resolveMoment(world, momentId, answer) {
 
   if (moment.kind === "cognition") {
     const result = resolveCognitionMoment(world, moment, agent, answer, false);
+    world.pending.splice(index, 1);
+    return result;
+  }
+
+  if (moment.kind === "goal_approach") {
+    const result = resolveGoalApproachMoment(world, moment, agent, answer, false);
     world.pending.splice(index, 1);
     return result;
   }
@@ -631,6 +650,142 @@ function resolveCognitionMoment(world, moment, agent, answer, engineFallback) {
   moment.resolved = true;
   rememberResolved(world, moment);
   return { ok: true, events, optionId: action };
+}
+
+/* ------------------------------------------------------------------ *
+ * Goal approaches: a model proposes, the engine validates and resolves
+ * ------------------------------------------------------------------ */
+
+/**
+ * Resolve a goal-approach request.
+ *
+ * A valid proposal becomes a deterministic set of real effects — the mind moves,
+ * edges change, the North Wall gains or loses courses. An invalid one, or one
+ * that never arrived, becomes the engine's own next move, and either way the
+ * proposal and its verdict are written into the world's record.
+ *
+ * @param {World} world
+ * @param {Moment} moment
+ * @param {Agent} agent
+ * @param {Record<string, any>} answer
+ * @param {boolean} engineFallback  True when no model answered in time.
+ * @returns {{ ok: boolean, reason?: string, events: WorldEvent[], optionId?: string }}
+ */
+function resolveGoalApproachMoment(world, moment, agent, answer, engineFallback) {
+  const cfg = world.config.proposals;
+  const approach = privateText(answer?.approach, cfg.approachMaxChars);
+  const proposal = validateApproach(world, agent, answer);
+  const accepted = proposal.ok && agent.awake && !agent.retired;
+  const reason = !agent.awake || agent.retired
+    ? (agent.retired ? "The mind left before it could act." : "The mind fell asleep before it could act.")
+    : proposal.reason;
+
+  agent.proposal.count += 1;
+  agent.proposal.nextTick = world.clock.tick + cfg.intervalTicks;
+  if (accepted) agent.proposal.acceptedCount += 1;
+  else agent.proposal.rejectedCount += 1;
+
+  const seqMark = world.seq;
+  /** @type {WorldEvent[]} */
+  let events = [];
+  let method = proposal.method || "focus";
+
+  if (accepted && agent.awake && !agent.retired) {
+    const resolution = resolveApproach(world, agent, proposal.method, proposal.targetId, approach);
+    method = proposal.method;
+    const result = applyEffects(world, resolution.ops, { actorId: agent.id, authored: Boolean(approach) });
+    events = result.events;
+    if (!resolution.quiet) {
+      logEvent(world, {
+        kind: resolution.eventKind,
+        agentId: agent.id,
+        text: resolution.text,
+        significance: resolution.significance,
+        regionId: agent.regionId,
+        subjectId: proposal.targetId,
+        authored: Boolean(approach)
+      });
+    }
+    agent.lastActedTick = world.clock.tick;
+    // Long quiet work still needs to surface occasionally, or a mind grinding
+    // away at its goal for a week reads as idle.
+    if (resolution.quiet) maybeSurfaceGoalWork(world, agent);
+  } else {
+    // Engine fallback: the same deterministic choice it would have made anyway.
+    const ranked = generateIntents(world, agent);
+    const intent = ranked[0] || null;
+    if (intent && agent.awake && !agent.retired) {
+      method = intent.kind;
+      events = resolveAndApply(world, agent, intent, ranked);
+    }
+  }
+
+  agent.proposal.last = {
+    tick: world.clock.tick,
+    text: approach || (engineFallback
+      ? "No answer arrived in time; the engine made the call."
+      : "The approach was refused, so the engine made the call."),
+    method,
+    targetId: proposal.targetId,
+    accepted,
+    reason,
+    source: accepted ? "model" : "engine"
+  };
+
+  // The proposal and its verdict are part of the world's history: a rejection
+  // is as much a fact about this mind as an acceptance is.
+  logEvent(world, {
+    kind: "proposal",
+    agentId: agent.id,
+    text: `${agent.name} proposed a way at ${agent.goal.text.toLowerCase()}: ` +
+      (agent.proposal.last.text) +
+      (accepted ? "" : ` The engine refused it — ${reason.toLowerCase()}.`),
+    significance: accepted ? 0.42 : 0.36,
+    regionId: agent.regionId,
+    subjectId: proposal.targetId,
+    authored: accepted && Boolean(approach),
+    proposal: {
+      text: agent.proposal.last.text,
+      method,
+      accepted,
+      reason,
+      source: accepted ? "model" : "engine",
+      targetId: proposal.targetId
+    }
+  });
+
+  moment.approachText = agent.proposal.last.text;
+  moment.approachMethod = method;
+  moment.approachAccepted = accepted;
+  moment.approachValidation = reason;
+  moment.optionId = method;
+  moment.resolution = method;
+  moment.engineResolved = !accepted;
+  moment.resolved = true;
+  rememberResolved(world, moment);
+
+  return { ok: true, events: world.events.filter(e => e.seq > seqMark).reverse(), optionId: method };
+}
+
+/**
+ * Long-running goal work should reach the feed now and then rather than never.
+ * @param {World} world
+ * @param {Agent} agent
+ */
+function maybeSurfaceGoalWork(world, agent) {
+  const interval = world.config.limits.goalLogInterval;
+  if (world.clock.tick - (agent.lastGoalLoggedTick ?? -9999) < interval) return;
+  agent.lastGoalLoggedTick = world.clock.tick;
+  logEvent(world, {
+    kind: "act",
+    agentId: agent.id,
+    text: phrase(world, agent, "pursue_goal", {
+      goal: agent.goal.text,
+      region: regionName(world, agent.regionId)
+    }),
+    significance: 0.2,
+    regionId: agent.regionId
+  });
 }
 
 /**

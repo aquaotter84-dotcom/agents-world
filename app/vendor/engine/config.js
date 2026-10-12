@@ -314,6 +314,26 @@ export const DEFAULT_CONFIG = {
     interferenceResentmentFloor: 22
   },
 
+  proposals: {
+    /**
+     * Proposal-based minds. When a mind acts on its own goal, the model proposes
+     * the *approach* in its own words and the engine decides whether that
+     * approach is actually possible here, what it costs, and what follows. The
+     * engine never lets a model supply numbers or consequences.
+     */
+    enabled: true,
+    /** A mind gets one model-authored approach this often, in world ticks. */
+    intervalTicks: 20,
+    /** Only minds whose goal is this far from finished are worth asking. */
+    maxGoalProgress: 0.98,
+    /** Hard bound on the approach text a model may write. */
+    approachMaxChars: 240,
+    /** A proposal that is still unanswered blocks the next one for this mind. */
+    maxPendingPerMind: 1,
+    /** Below this energy the engine will not validate any ambitious approach. */
+    minEnergy: 12
+  },
+
   cognition: {
     /** Only this many starting minds receive periodic open-plan model calls. */
     pilotCount: 2,

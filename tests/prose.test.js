@@ -52,6 +52,17 @@ function runs(ticks) {
             resolveMoment(world, moment.id, { action: "observe", target: "NONE", plan: "I will look around carefully." });
             continue;
           }
+          // A proposal has no menu: the model names an approach instead. Cycling
+          // through the ones on offer keeps the lines distinct across a long run.
+          if (moment.kind === "goal_approach") {
+            const offered = /** @type {any} */ (moment.context).availableMethods || ["focus"];
+            const method = offered[i % offered.length];
+            resolveMoment(world, moment.id, {
+              method,
+              approach: `Working at it their own way — ${method.replace(/_/g, " ")} for now.`
+            });
+            continue;
+          }
           const generated = moment.options.find(o => String(o.id).startsWith("new_goal"));
           const chosen = generated || moment.options[moment.options.length - 1];
           resolveMoment(world, moment.id, { optionId: chosen.id });

@@ -13,7 +13,7 @@
  * @property {string} id
  * @property {number} seq
  * @property {number} tick
- * @property {string} kind        act | contact | conflict | confide | gossip | secret | relationship | goal | triumph | level | world | death | betrayal | chronicle
+ * @property {string} kind        act | contact | conflict | confide | gossip | secret | relationship | goal | triumph | level | world | death | betrayal | chronicle | proposal
  * @property {string|null} agentId
  * @property {string|null} subjectId
  * @property {string} text
@@ -24,6 +24,10 @@
  * @property {{reason: string, changes: {axis: string, before: number, after: number}[]}} [relationship]
  * @property {boolean} [authored]   True when a model wrote the prose rather than the engine.
  * @property {{speakerId: string, text: string}[]} [scene]  The lines two minds exchanged, when the event is a conversation.
+ * @property {{text: string, method: string, accepted: boolean, reason: string, source: string, targetId?: string|null}} [proposal]
+ *   A model-authored approach and the engine's verdict on it. Only present on
+ *   `proposal` events, and only ever as a record — nothing reads it back to
+ *   drive the simulation.
  */
 
 import { clamp } from "../config.js";
@@ -52,7 +56,8 @@ export function logEvent(world, event) {
     secretId: event.secretId,
     projectId: event.projectId,
     relationship: event.relationship,
-    authored: event.authored
+    authored: event.authored,
+    proposal: event.proposal
   };
   if (event.scene && event.scene.length) full.scene = event.scene;
   world.events.unshift(full);

@@ -13,7 +13,7 @@ import { createRng } from "./rng.js";
 import { makeConfig } from "./config.js";
 import { makeIdFactory } from "./model/world.js";
 import { createNorthWallProject } from "./model/projects.js";
-import { createCognitionState } from "./model/agent.js";
+import { createCognitionState, createProposalState } from "./model/agent.js";
 
 /**
  * The parts of a world worth persisting. Derived data (factions, stats) is
@@ -102,6 +102,21 @@ export function deserializeWorld(input) {
     if (!Number.isFinite(agent.cognition.nextPlanTick)) agent.cognition.nextPlanTick = enabled ? offset : -1;
     if (!Number.isFinite(agent.cognition.lastPlanTick)) agent.cognition.lastPlanTick = -1;
     if (!Number.isFinite(agent.cognition.planCount)) agent.cognition.planCount = 0;
+
+    // A world saved before proposal-based minds existed has no proposal record.
+    // Stagger the first approach the same way cognition staggers its first plan,
+    // so a resumed world does not ask all nine minds at once.
+    const savedProposal = agent.proposal;
+    const proposalInterval = Math.max(1, world.config.proposals.intervalTicks);
+    const proposalOffset = 1 + Math.floor(index * proposalInterval / Math.max(1, world.agents.length));
+    agent.proposal = {
+      ...createProposalState(proposalOffset),
+      ...(savedProposal || {})
+    };
+    if (!Number.isFinite(agent.proposal.nextTick)) agent.proposal.nextTick = proposalOffset;
+    if (!Number.isFinite(agent.proposal.count)) agent.proposal.count = 0;
+    if (!Number.isFinite(agent.proposal.acceptedCount)) agent.proposal.acceptedCount = 0;
+    if (!Number.isFinite(agent.proposal.rejectedCount)) agent.proposal.rejectedCount = 0;
   }
   world.rng = rng;
   world.idCounters = counters;

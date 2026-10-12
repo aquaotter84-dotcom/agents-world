@@ -916,7 +916,7 @@ export function chooseDefaultOption(world, agent, moment) {
  * @param {string} need
  * @returns {number}
  */
-function classAptitude(agent, need) {
+export function classAptitude(agent, need) {
   const table = {
     Scholar: { meaning: 1.3, connection: 0.9 },
     Warden: { energy: 1.2, esteem: 1.1 },
