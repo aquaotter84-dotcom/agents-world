@@ -15,6 +15,7 @@ import { createAgent } from "./agent.js";
 import { createMemory, remember } from "./memory.js";
 import { neutralEdge } from "./relationships.js";
 import { createNorthWallProject } from "./projects.js";
+import { createCharter } from "./charter.js";
 
 /**
  * @typedef {import("./agent.js").Agent} Agent
@@ -57,6 +58,9 @@ import { createNorthWallProject } from "./projects.js";
  * @property {string} [goalKind]
  * @property {boolean} [atProjectSite]
  * @property {string[]} [availableMethods]  Approaches the engine can resolve from here.
+ * @property {{ruleKind: string, name: string, kind: string, gloss: string, basis: string}[]} [petitionable]
+ *   The changes this mind could honestly petition for, each with the fact that justifies it.
+ * @property {string} [whisperSubject]     What a mind has to tell the keeper about, in outline.
  * @property {string[]} memories
  * @property {string} [memorySummary]       Persistent private cognition summary.
  * @property {string[]} [privateBeliefs]
@@ -94,7 +98,7 @@ import { createNorthWallProject } from "./projects.js";
  * @typedef {object} Moment
  * @property {string} id
  * @property {number} tick
- * @property {string} kind        decision | dialogue | reflection | confrontation | betrayal | confession | declaration | cognition | goal_approach
+ * @property {string} kind        decision | dialogue | reflection | confrontation | betrayal | confession | declaration | cognition | goal_approach | petition | whisper
  * @property {string} agentId
  * @property {string[]} participants
  * @property {number} significance
@@ -113,6 +117,8 @@ import { createNorthWallProject } from "./projects.js";
  * @property {string} [approachMethod]    The validated verb the engine resolved it as.
  * @property {boolean} [approachAccepted]
  * @property {string} [approachValidation]
+ * @property {string} [petitionId]        The charter petition a petition moment produced.
+ * @property {string} [whisperId]         The charter whisper a whisper moment produced.
  * @property {MomentOption[]} options
  */
 
@@ -129,6 +135,7 @@ import { createNorthWallProject } from "./projects.js";
  * @property {Record<string, number>} tallies  Lifetime count of every event kind, since the log rolls over.
  * @property {Secret[]} secrets
  * @property {NorthWallProject} project  Shared, persistent North Wall construction project.
+ * @property {import("./charter.js").Charter} charter  Traditions, laws, roles, precedents, petitions.
  * @property {Moment[]} pending     Emitted moments awaiting a model answer.
  * @property {Moment[]} resolved    Moments that have been answered and applied.
  * @property {number} seq
@@ -224,6 +231,7 @@ export function createWorld(opts = {}) {
     tallies: {},
     secrets: [],
     project: createNorthWallProject(),
+    charter: createCharter(),
     pending: [],
     resolved: [],
     seq: 0,

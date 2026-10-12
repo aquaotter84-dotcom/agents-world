@@ -23,6 +23,8 @@ import { generateIntents } from "./decision/intents.js";
 import { buildMoment, isMomentWorthy } from "./decision/moments.js";
 import { resolveIntent, chooseDefaultOption } from "./systems/act.js";
 import { buildGoalApproachMoment, proposalEligible, resolveApproach, validateApproach } from "./decision/proposals.js";
+import { buildPetitionMoment, buildWhisperMoment, petitionEligible, whisperEligible, validatePetition, openDilemma } from "./decision/petitions.js";
+import { settleCharter, recordPetition, describeRule } from "./systems/charter.js";
 import { applyEffects } from "./systems/effects.js";
 import { settleNeeds, checkCollapse } from "./systems/needs.js";
 import { settleRelations, settleProximity, hatchSecrets } from "./systems/social.js";
@@ -44,6 +46,7 @@ import { standingWord, stateLine } from "./model/agent.js";
  * @typedef {import("./decision/intents.js").Intent} Intent
  * @typedef {import("./model/world.js").Moment} Moment
  * @typedef {import("./model/events.js").WorldEvent} WorldEvent
+ * @typedef {import("./model/charter.js").Petition} Petition
  */
 
 /**
@@ -126,6 +129,16 @@ export function step(world) {
       planCandidates.push({ agent, moment: buildGoalApproachMoment(world, agent) });
       continue;
     }
+    // A mind that has something in the world to point at may ask the keeper to
+    // change how the world runs — or tell the keeper something privately.
+    if (petitionEligible(world, agent, tick)) {
+      planCandidates.push({ agent, moment: buildPetitionMoment(world, agent) });
+      continue;
+    }
+    if (whisperEligible(world, agent, tick)) {
+      planCandidates.push({ agent, moment: buildWhisperMoment(world, agent) });
+      continue;
+    }
     decisions.push({ agent, intent, ranked });
   }
 
@@ -158,6 +171,12 @@ export function step(world) {
     if (moment.kind === "goal_approach") {
       agent.proposal.nextTick = tick + cfg.proposals.intervalTicks;
     }
+    if (moment.kind === "petition") {
+      agent.petition.nextTick = tick + cfg.charter.petitionIntervalTicks;
+    }
+    if (moment.kind === "whisper") {
+      agent.whisper.nextTick = tick + cfg.charter.whisperIntervalTicks;
+    }
   }
 
   /* ---- 5. Everything else resolves now ---- */
@@ -173,6 +192,8 @@ export function step(world) {
   settleTurnover(world);
   settleRituals(world);
   trackFeuds(world);
+  settleCharter(world);
+  maybeRaiseDilemma(world);
   // Systems queue ops rather than applying them mid-pass, so that nothing here
   // can mutate an agent halfway through another system's read of it.
   if (world.pendingOps && world.pendingOps.length) {
@@ -340,6 +361,10 @@ export function expireMoments(world) {
         resolveCognitionMoment(world, moment, agent, {}, true);
       } else if (moment.kind === "goal_approach") {
         resolveGoalApproachMoment(world, moment, agent, {}, true);
+      } else if (moment.kind === "petition") {
+        resolvePetitionMoment(world, moment, agent, {}, true);
+      } else if (moment.kind === "whisper") {
+        resolveWhisperMoment(world, moment, agent, {}, true);
       } else {
         const option = chooseDefaultOption(world, agent, moment);
         applyMomentOption(world, moment, agent, option, null);
@@ -383,7 +408,7 @@ function rememberResolved(world, moment) {
  *   optionId?: string, prose?: string, thought?: string, goal?: string, goalKind?: string,
  *   action?: string, target?: string, about?: string, plan?: string, priority?: string,
  *   belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string,
- *   approach?: string, method?: string
+ *   approach?: string, method?: string, ruleKind?: string, petition?: string, whisper?: string
  * }} answer
  * @returns {{ ok: boolean, reason?: string, events: WorldEvent[], optionId?: string }}
  */
@@ -406,6 +431,18 @@ export function resolveMoment(world, momentId, answer) {
 
   if (moment.kind === "goal_approach") {
     const result = resolveGoalApproachMoment(world, moment, agent, answer, false);
+    world.pending.splice(index, 1);
+    return result;
+  }
+
+  if (moment.kind === "petition") {
+    const result = resolvePetitionMoment(world, moment, agent, answer, false);
+    world.pending.splice(index, 1);
+    return result;
+  }
+
+  if (moment.kind === "whisper") {
+    const result = resolveWhisperMoment(world, moment, agent, answer, false);
     world.pending.splice(index, 1);
     return result;
   }
@@ -768,6 +805,36 @@ function resolveGoalApproachMoment(world, moment, agent, answer, engineFallback)
 }
 
 /**
+ * Put a dilemma in front of the keeper when the world has produced one: a feud
+ * that has run out of room, or shared work that has stalled with everyone
+ * watching. The engine decides a dilemma exists; the keeper decides what to do.
+ * @param {World} world
+ */
+function maybeRaiseDilemma(world) {
+  const charter = world.charter;
+  const raised = openDilemma(world, world.clock.tick);
+  if (!raised) return;
+  /** @type {import("./model/charter.js").Dilemma} */
+  const dilemma = {
+    id: world.nextId("dil"),
+    text: raised.text,
+    partyIds: raised.partyIds,
+    kind: raised.kind,
+    tick: world.clock.tick,
+    status: "open"
+  };
+  charter.dilemmas.push(dilemma);
+  if (charter.dilemmas.length > 24) charter.dilemmas = charter.dilemmas.slice(-24);
+  logEvent(world, {
+    kind: "charter",
+    agentId: raised.partyIds[0] ?? null,
+    text: raised.text,
+    significance: 0.78,
+    regionId: agentById(world, raised.partyIds[0] ?? "")?.regionId
+  });
+}
+
+/**
  * Long-running goal work should reach the feed now and then rather than never.
  * @param {World} world
  * @param {Agent} agent
@@ -786,6 +853,134 @@ function maybeSurfaceGoalWork(world, agent) {
     significance: 0.2,
     regionId: agent.regionId
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Petitions, whispers, dilemmas: the keeper-facing loops
+ * ------------------------------------------------------------------ */
+
+/**
+ * Resolve a petition moment. A validated petition does not change the world
+ * directly — it puts a question in front of the keeper, and the keeper's ruling
+ * is what becomes law and precedent.
+ *
+ * @param {World} world
+ * @param {Moment} moment
+ * @param {Agent} agent
+ * @param {Record<string, any>} answer
+ * @param {boolean} engineFallback
+ * @returns {{ ok: boolean, reason?: string, events: WorldEvent[], optionId?: string }}
+ */
+function resolvePetitionMoment(world, moment, agent, answer, engineFallback) {
+  const cfg = world.config.charter;
+  const words = privateText(answer?.petition ?? answer?.prose, 320);
+  const check = validatePetition(world, agent, answer);
+  const accepted = check.ok && agent.awake && !agent.retired;
+  const reason = !agent.awake || agent.retired
+    ? "The mind left before the petition could be made."
+    : check.reason;
+
+  agent.petition.nextTick = world.clock.tick + cfg.petitionIntervalTicks;
+  agent.petition.count += 1;
+
+  const seqMark = world.seq;
+  /** @type {Petition|null} */
+  let petition = null;
+  if (accepted) {
+    petition = recordPetition(world, agent, check, words);
+    agent.petition.lastText = petition.text;
+  }
+
+  const text = accepted && petition
+    ? `${agent.name} petitioned the keeper for ${describeRule(check.ruleKind)}: “${petition.text}” ` +
+      `(${petition.support} mind${petition.support === 1 ? "" : "s"} behind it${petition.precedentId ? ", and the keeper has ruled on this before" : ""}).`
+    : `${agent.name} wanted to petition the keeper, but had nothing in the world to point at.`;
+
+  logEvent(world, {
+    kind: "charter",
+    agentId: agent.id,
+    text,
+    significance: accepted ? 0.62 : 0.3,
+    regionId: agent.regionId,
+    authored: accepted && Boolean(words),
+    proposal: accepted && petition
+      ? { text: petition.text, method: check.ruleKind, accepted: true, reason, source: "model" }
+      : undefined
+  });
+
+  moment.petitionId = petition?.id;
+  moment.approachText = petition?.text;
+  moment.approachMethod = check.ruleKind;
+  moment.approachAccepted = accepted;
+  moment.approachValidation = reason;
+  moment.optionId = accepted ? check.ruleKind : "refused";
+  moment.resolution = moment.optionId;
+  moment.engineResolved = !accepted || engineFallback;
+  moment.resolved = true;
+  rememberResolved(world, moment);
+
+  return { ok: true, events: world.events.filter(e => e.seq > seqMark).reverse(), optionId: moment.optionId };
+}
+
+/**
+ * Resolve a whisper moment. The whisper is recorded and waits; nothing in the
+ * world changes until the keeper decides to act on it.
+ *
+ * @param {World} world
+ * @param {Moment} moment
+ * @param {Agent} agent
+ * @param {Record<string, any>} answer
+ * @param {boolean} engineFallback
+ * @returns {{ ok: boolean, reason?: string, events: WorldEvent[], optionId?: string }}
+ */
+function resolveWhisperMoment(world, moment, agent, answer, engineFallback) {
+  const cfg = world.config.charter;
+  const words = privateText(answer?.whisper ?? answer?.prose, 280);
+  const aboutId = moment.participants[1] ?? null;
+  const accepted = Boolean(words) && agent.awake && !agent.retired;
+
+  agent.whisper.nextTick = world.clock.tick + cfg.whisperIntervalTicks;
+  agent.whisper.count += 1;
+
+  const seqMark = world.seq;
+  if (accepted) {
+    /** @type {import("./model/charter.js").Whisper} */
+    const whisper = {
+      id: world.nextId("whi"),
+      agentId: agent.id,
+      aboutId,
+      text: words,
+      tick: world.clock.tick
+    };
+    world.charter.whispers.push(whisper);
+    agent.whisper.lastText = words;
+    moment.whisperId = whisper.id;
+  }
+
+  const about = aboutId ? agentById(world, aboutId) : null;
+  logEvent(world, {
+    kind: "charter",
+    agentId: agent.id,
+    subjectId: aboutId,
+    // The record says a private thing was said without saying what it was. The
+    // keeper can read the whisper itself; the world only knows it happened.
+    text: accepted
+      ? `${agent.name} told the keeper something in private${about ? ` about ${about.name}` : ""}, and left it there.`
+      : `${agent.name} started to tell the keeper something and stopped.`,
+    significance: accepted ? 0.5 : 0.24,
+    regionId: agent.regionId
+  });
+
+  moment.approachText = accepted ? words : "";
+  moment.approachAccepted = accepted;
+  moment.approachValidation = accepted ? "Recorded for the keeper." : "Nothing was said.";
+  moment.optionId = accepted ? "whispered" : "withheld";
+  moment.resolution = moment.optionId;
+  moment.engineResolved = !accepted || engineFallback;
+  moment.resolved = true;
+  rememberResolved(world, moment);
+
+  return { ok: true, events: world.events.filter(e => e.seq > seqMark).reverse(), optionId: moment.optionId };
 }
 
 /**

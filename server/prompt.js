@@ -166,6 +166,100 @@ function buildGoalApproachPrompt(world, moment) {
 }
 
 /**
+ * Build the prompt in which a mind asks the keeper to change how the world runs.
+ *
+ * The list offered is the list the engine can actually legislate *and* has
+ * something in the world to justify — a mind cannot invent a law about a
+ * problem that has not happened.
+ *
+ * @param {import("../engine/model/world.js").World} world
+ * @param {Moment} moment
+ */
+function buildPetitionPrompt(world, moment) {
+  const agent = agentById(world, moment.agentId);
+  if (!agent) return { messages: [], maxTokens: 0 };
+  const ctx = moment.context;
+  const offered = /** @type {any[]} */ (ctx.petitionable || []);
+  const lines = [
+    `You are ${ctx.agentName}, one of ${world.agents.filter(a => !a.retired).length} minds living in a small, cold world.`,
+    `You are ${agent.personality.toLowerCase()}. ${agent.backstory}`,
+    "",
+    `Right now: ${ctx.region}, ${ctx.phase}. ${ctx.stateLine}`,
+    `What you are for: ${ctx.goal}`,
+    ""
+  ];
+  if (ctx.memories && ctx.memories.length) {
+    lines.push("What you remember about this:");
+    for (const memory of ctx.memories.slice(0, 4)) lines.push(`  - ${memory}`);
+    lines.push("");
+  }
+  lines.push(
+    moment.question,
+    "",
+    "These are the changes you could honestly ask for, each with the fact that justifies asking:",
+    offered.map(o => `  - ${o.ruleKind} (${o.kind}): ${o.name} — ${o.gloss} Because: ${o.basis}`).join("\n"),
+    ""
+  );
+  lines.push(
+    "The keeper rules on petitions. A ruling becomes precedent, so asking for something the keeper already refused once is not nothing — but say why this time is different.",
+    "The engine decides whether your petition is admissible and what it costs to enact. Never invent effects, numbers, or outcomes.",
+    "",
+    "Answer with exactly two lines and nothing else.",
+    "PETITION: <the petition itself, in your own voice, one or two sentences. Say what you want and why this world needs it.>",
+    "RULE_KIND: <exactly one token from the list above>",
+    "Optionally add a third line, THOUGHT: <one short first-person sentence you would never say aloud>."
+  );
+  return {
+    messages: [
+      { role: "system", content: lines.join("\n") },
+      { role: "user", content: `What does ${agent.name} ask the keeper for?` }
+    ],
+    maxTokens: 240
+  };
+}
+
+/**
+ * Build the prompt in which a mind tells the keeper something privately.
+ * @param {import("../engine/model/world.js").World} world
+ * @param {Moment} moment
+ */
+function buildWhisperPrompt(world, moment) {
+  const agent = agentById(world, moment.agentId);
+  if (!agent) return { messages: [], maxTokens: 0 };
+  const ctx = moment.context;
+  const lines = [
+    `You are ${ctx.agentName}. The keeper is listening, and nobody else is.`,
+    `You are ${agent.personality.toLowerCase()}. ${agent.backstory}`,
+    "",
+    `Right now: ${ctx.region}, ${ctx.phase}. ${ctx.stateLine}`,
+    ""
+  ];
+  if (ctx.targetName) {
+    lines.push(`This is about ${ctx.targetName}. You regard them as ${ctx.relationPhrase}.`);
+    lines.push("");
+  }
+  if (ctx.secretText) lines.push(`What you have never said out loud: ${ctx.secretText}`, "");
+  if (ctx.grievance) lines.push(`What you have not let go of: ${ctx.grievance}`, "");
+  lines.push(
+    moment.question,
+    "",
+    "The keeper may act on what you say, and acting on it costs the keeper something. Nothing changes until they decide.",
+    "Do not invent facts the world has not given you. Say what you actually know.",
+    "",
+    "Answer with exactly one line and nothing else.",
+    "WHISPER: <what you tell the keeper, in your own voice, one or two sentences>",
+    "Optionally add a second line, THOUGHT: <one short first-person sentence you would never say aloud>."
+  );
+  return {
+    messages: [
+      { role: "system", content: lines.join("\n") },
+      { role: "user", content: `What does ${agent.name} whisper?` }
+    ],
+    maxTokens: 180
+  };
+}
+
+/**
  * Build the chat messages for a moment.
  * @param {import("../engine/model/world.js").World} world
  * @param {Moment} moment
@@ -174,6 +268,8 @@ function buildGoalApproachPrompt(world, moment) {
 export function buildPrompt(world, moment) {
   if (moment.kind === "cognition") return buildCognitionPrompt(world, moment);
   if (moment.kind === "goal_approach") return buildGoalApproachPrompt(world, moment);
+  if (moment.kind === "petition") return buildPetitionPrompt(world, moment);
+  if (moment.kind === "whisper") return buildWhisperPrompt(world, moment);
   const agent = agentById(world, moment.agentId);
   if (!agent) return { messages: [], maxTokens: 0 };
   const ctx = moment.context;
@@ -257,6 +353,8 @@ export function parseReply(raw, moment) {
   if (!raw) return {};
   if (moment.kind === "cognition") return parseCognitionReply(raw);
   if (moment.kind === "goal_approach") return parseApproachReply(raw);
+  if (moment.kind === "petition") return parseCharterReply(raw, "petition", "ruleKind");
+  if (moment.kind === "whisper") return parseCharterReply(raw, "whisper");
   const text = String(raw).trim();
 
   /** @type {{optionId?: string, prose?: string, thought?: string}} */
@@ -288,6 +386,49 @@ export function parseReply(raw, moment) {
   const thought = text.match(/^\s*THOUGHT\s*[:\-]\s*(.+)$/im);
   if (thought) out.thought = tidy(thought[1]);
 
+  return out;
+}
+
+/**
+ * Parse a charter answer: the mind's own words plus, for petitions, one token
+ * from the rule grammar. Scaffolding and refusals are dropped rather than
+ * recorded, so the world's book of customs never contains a model talking about
+ * being a model.
+ * @param {string|null} raw
+ * @param {"petition"|"whisper"} bodyKey
+ * @param {string} [tokenKey]
+ * @returns {Record<string, string>}
+ */
+export function parseCharterReply(raw, bodyKey, tokenKey) {
+  if (!raw) return {};
+  const text = String(raw).trim();
+  /** @param {string} label */
+  const field = label => {
+    const match = text.match(new RegExp(`^\\s*${label}\\s*[:\\-]\\s*(.*)$`, "im"));
+    return match ? tidy(match[1]) : "";
+  };
+
+  /** @type {Record<string, string>} */
+  const out = {};
+  const body = field(bodyKey.toUpperCase());
+  if (body && !NOT_AN_APPROACH.test(body)) out[bodyKey] = body;
+
+  const thought = field("THOUGHT");
+  if (thought && !NOT_AN_APPROACH.test(thought)) out.thought = thought;
+
+  if (tokenKey) {
+    const token = field("RULE_KIND").toLowerCase().replace(/[\s-]+/g, "_");
+    if (token) out[tokenKey] = token;
+  }
+
+  if (!out[bodyKey]) {
+    const rest = text
+      .split("\n")
+      .filter(line => !/^\s*(PETITION|WHISPER|RULE_KIND|THOUGHT)\s*[:\-]/i.test(line))
+      .join(" ")
+      .trim();
+    if (rest && !NOT_AN_APPROACH.test(rest)) out[bodyKey] = tidy(rest);
+  }
   return out;
 }
 
@@ -415,6 +556,10 @@ export function describeMoment(world, moment) {
     ? "self-authored plan"
     : moment.kind === "goal_approach"
       ? "self-authored approach"
-      : moment.kind;
+      : moment.kind === "petition"
+        ? "petition to the keeper"
+        : moment.kind === "whisper"
+          ? "whisper to the keeper"
+          : moment.kind;
   return `${agent ? agent.name : "?"} (${label}${other ? " with " + other.name : ""}) at ${regionName(world, agent ? agent.regionId : "")}`;
 }

@@ -71,6 +71,13 @@ import { clamp } from "../config.js";
  */
 
 /**
+ * @typedef {object} AgentPetitionLog
+ * @property {number} nextTick  Tick this mind may next petition or whisper.
+ * @property {number} count
+ * @property {string} [lastText]
+ */
+
+/**
  * @typedef {object} Agent
  * @property {string} id
  * @property {string} name
@@ -100,6 +107,8 @@ import { clamp } from "../config.js";
  * @property {Goal} goal
  * @property {AgentCognition} cognition  Private, durable cognition for the small pilot cast.
  * @property {AgentProposal} proposal     Bookkeeping for model-authored goal approaches.
+ * @property {AgentPetitionLog} petition  Bookkeeping for petitions to the keeper.
+ * @property {AgentPetitionLog} whisper   Bookkeeping for things told to the keeper privately.
  * @property {Record<string, RelationEdge>} relations
  * @property {Memory} memory
  * @property {number} createdTick
@@ -449,6 +458,8 @@ export function createAgent(spec, rng, tick, memory, levelDivisor = 45) {
     },
     cognition: createCognitionState(),
     proposal: createProposalState(),
+    petition: { nextTick: 0, count: 0 },
+    whisper: { nextTick: 0, count: 0 },
     relations: {},
     memory,
     createdTick: tick,

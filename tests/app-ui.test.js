@@ -183,7 +183,10 @@ test("the record carries a chronicle and the secrets people are keeping", async 
   try {
     // The opening ticks close at least one day, which is what a chronicle entry needs.
     const tabs = $$(doc, "#record-tabs .rtab");
-    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets", "Threads", "Keeper"]);
+    assert.deepEqual(
+      tabs.map(t => t.textContent),
+      ["Feed", "Chronicle", "Secrets", "Threads", "Charter", "Keeper"]
+    );
 
     tabs.find(t => t.dataset.view === "chronicle").click();
     const days = $$(doc, "#record-pane .day-card");
@@ -197,6 +200,16 @@ test("the record carries a chronicle and the secrets people are keeping", async 
     assert.ok(
       secrets.some(s => s.textContent.includes("HELD BY")),
       "a private secret reports how many minds are carrying it"
+    );
+
+    // The charter is the keeper-facing half of the loop: influence, what is
+    // waiting on a ruling, and whatever the world has already decided.
+    tabs.find(t => t.dataset.view === "charter").click();
+    const charterText = text(doc, "record-pane");
+    assert.ok(charterText.includes("influence"), "the charter shows what the keeper can spend");
+    assert.ok(
+      charterText.includes("Awaiting your ruling") || charterText.includes("Nobody has asked you"),
+      "the charter either shows petitions or says plainly that there are none"
     );
   } finally { restore(); }
 });

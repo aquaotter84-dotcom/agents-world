@@ -28,7 +28,9 @@ import {
   applyChatInfluence,
   socialTemperature, currentFactions,
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
-  levelProgress, pressingNeed
+  levelProgress, pressingNeed,
+  ruleOnPetition, resolveDilemma, actOnWhisper, describeRule, influenceWord,
+  RULE_KINDS, precedentFor
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -652,6 +654,148 @@ function keeperPanelHtml() {
     "</div>";
 }
 
+/**
+ * The charter: what the world has decided about how it lives.
+ *
+ * This is the keeper-facing half of the loop. A mind petitions, the world waits
+ * on a ruling, and the ruling becomes precedent — so the screen has to show the
+ * open question, the fact that justifies asking, what it costs, and whether the
+ * keeper has ruled on this kind of thing before. Everything here is a decision,
+ * not a display.
+ * @param {HTMLElement} pane
+ */
+function renderCharter(pane) {
+  const charter = world.charter;
+  if (!charter) {
+    pane.innerHTML = '<p class="note">This world has no charter yet.</p>';
+    return;
+  }
+  const pct = Math.round((charter.influence / charter.influenceMax) * 100);
+  const open = charter.petitions.filter(p => p.status === "open");
+  const openDilemmas = charter.dilemmas.filter(d => d.status === "open");
+  const unheard = charter.whispers.filter(w => !w.actedOn);
+
+  let html = '<div class="card charter-head">' +
+    '<p class="eyebrow">The charter</p>' +
+    '<h3>' + Math.round(charter.influence) + " influence</h3>" +
+    '<div class="ks-bar"><span style="width:' + pct + '%"></span></div>' +
+    '<p class="note">' + esc(influenceWord(charter)) + '</p>' +
+    '<p class="note">' + charter.rules.length + " enacted · " + charter.roles.length +
+    " roles the world uses · " + charter.precedents.length + " precedents · " +
+    charter.rulingsMade + " rulings made</p>" +
+    "</div>";
+
+  if (charter.wallRaised) {
+    html += '<div class="card charter-win"><p class="eyebrow">The shared win</p>' +
+      "<p>The North Wall stands. Every mind here is safer for work they did together.</p></div>";
+  }
+
+  if (openDilemmas.length) {
+    for (const dilemma of openDilemmas) {
+      html += '<div class="card dilemma-card"><p class="eyebrow">A dilemma, and it is yours</p>' +
+        "<p>" + esc(dilemma.text) + "</p>" +
+        '<div class="dilemma-choices">' +
+        dilemmaChoicesHtml(dilemma).join("") +
+        "</div></div>";
+    }
+  }
+
+  if (unheard.length) {
+    html += '<div class="card whispers-card"><p class="eyebrow">Told to you in private</p>';
+    for (const whisper of unheard.slice(0, 4)) {
+      const teller = agentById(world, whisper.agentId);
+      const about = whisper.aboutId ? agentById(world, whisper.aboutId) : null;
+      html += '<div class="whisper-row"><p class="whisper-text">“' + esc(whisper.text) + "”</p>" +
+        '<p class="note">' + esc(teller ? teller.name : "Somebody") +
+        (about ? ", about " + esc(about.name) : "") + "</p>" +
+        '<button class="btn small act-whisper" data-id="' + esc(whisper.id) + '">Act on it (' +
+        world.config.charter.actOnWhisperCost + ")</button></div>";
+    }
+    html += "</div>";
+  }
+
+  if (open.length) {
+    html += '<p class="eyebrow section-gap">Awaiting your ruling</p>';
+    for (const petition of open) {
+      const agent = agentById(world, petition.agentId);
+      const spec = /** @type {any} */ (RULE_KINDS)[petition.ruleKind] || {};
+      const prior = precedentFor(charter, petition.ruleKind);
+      const affordable = charter.influence >= (petition.cost || 0);
+      html += '<div class="card petition-card" data-petition="' + esc(petition.id) + '">' +
+        '<p class="eyebrow">' + esc(petition.kind === "law" ? "A proposed law" : "A proposed tradition") + "</p>" +
+        "<p class='petition-text'>“" + esc(petition.text) + "”</p>" +
+        '<p class="note">' + esc(agent ? agent.name : "A mind") + " asked on Day " +
+        dayOfTick(petition.tick) + "</p>" +
+        (petition.basis ? '<p class="note">Because: ' + esc(petition.basis) + "</p>" : "") +
+        '<p class="note">' + petition.support + " mind" + (petition.support === 1 ? "" : "s") +
+        " behind it · " + esc(spec.gloss || describeRule(petition.ruleKind)) + "</p>" +
+        (prior ? '<p class="note prior">You have ruled on this before — ' + esc(prior.ruling) + ".</p>" : "") +
+        '<div class="petition-actions">' +
+        '<button class="btn enact-petition" data-id="' + esc(petition.id) + '"' +
+        (affordable ? "" : " disabled") + ">Enact (" + (petition.cost || 0) + ")</button>" +
+        '<button class="btn ghost refuse-petition" data-id="' + esc(petition.id) + '">Refuse</button>' +
+        "</div></div>";
+    }
+  } else {
+    html += '<p class="note">Nobody has asked you for anything yet. Minds petition when the world ' +
+      "gives them something to point at — a wall that has been damaged, a feud with no room left, " +
+      "a favour nobody repaid.</p>";
+  }
+
+  if (charter.roles.length) {
+    html += '<p class="eyebrow section-gap">Names the world has started using</p><div class="role-list">';
+    for (const role of charter.roles) {
+      const holder = agentById(world, role.holderId);
+      html += '<div class="role-row"><strong>' + esc(role.name) + "</strong> — " +
+        esc(holder ? holder.name : "somebody who left") +
+        '<span class="note">' + esc(role.basis) + "</span></div>";
+    }
+    html += "</div>";
+  }
+
+  const enacted = charter.rules.filter(r => r.ruling === "enacted");
+  if (enacted.length) {
+    html += '<p class="eyebrow section-gap">How this world runs now</p>';
+    for (const rule of enacted) {
+      const agent = agentById(world, rule.proposedBy);
+      html += '<div class="card rule-card"><p><strong>' + esc(describeRule(rule.ruleKind)) + "</strong>" +
+        ' <span class="note">' + esc(rule.kind) + " proposed by " + esc(agent ? agent.name : "somebody") + "</span></p>" +
+        '<p class="note">“' + esc(rule.text) + "”</p>" +
+        (rule.rulingNote ? '<p class="note keeper-note">Your words: “' + esc(rule.rulingNote) + "”</p>" : "") +
+        "</div>";
+    }
+  }
+
+  pane.innerHTML = html;
+}
+
+/**
+ * The keeper's choices on a dilemma, priced.
+ * @param {any} dilemma
+ */
+function dilemmaChoicesHtml(dilemma) {
+  const kinds = dilemma.kind === "feud"
+    ? [
+        { id: "separate", label: "Send them to different ends of the world" },
+        { id: "mediate", label: "Make them sit down together" },
+        { id: "condemn", label: "Condemn the worse of them publicly" },
+        { id: "let_it_ride", label: "Let it run its course" }
+      ]
+    : [
+        { id: "rally", label: "Call the world to the wall" },
+        { id: "shame", label: "Name the ones who are not lifting" },
+        { id: "let_it_ride", label: "Let the wall wait" }
+      ];
+  const base = world.config.charter.dilemmaCost;
+  return kinds.map(c => {
+    const cost = c.id === "mediate" ? base + 4 : (c.id === "condemn" || c.id === "shame") ? Math.round(base / 2) : 0;
+    const affordable = world.charter.influence >= cost;
+    return '<button class="btn small resolve-dilemma" data-id="' + esc(dilemma.id) +
+      '" data-choice="' + esc(c.id) + '"' + (affordable ? "" : " disabled") + ">" +
+      esc(c.label) + (cost ? " (" + cost + ")" : "") + "</button>";
+  });
+}
+
 function renderRecord() {
   const pane = $("record-pane");
   pane.innerHTML = "";
@@ -721,6 +865,10 @@ function renderRecord() {
   }
   if (ui.record === "threads") {
     renderThreads(pane);
+    return;
+  }
+  if (ui.record === "charter") {
+    renderCharter(pane);
     return;
   }
   // feed
@@ -2151,6 +2299,43 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("record-pane").addEventListener("click", ev => {
     const target = /** @type {HTMLElement|null} */ (ev.target);
+
+    /* ---- charter: the keeper's rulings ---- */
+    const enact = target?.closest(".enact-petition");
+    if (enact) {
+      const result = ruleOnPetition(world, /** @type {any} */ (enact).dataset.id, "enact");
+      if (!result.ok) toast(result.reason || "You cannot enact that.");
+      save();
+      renderCharter(/** @type {any} */ ($("record-pane")));
+      renderRecord();
+      return;
+    }
+    const refuse = target?.closest(".refuse-petition");
+    if (refuse) {
+      const result = ruleOnPetition(world, /** @type {any} */ (refuse).dataset.id, "refuse");
+      if (!result.ok) toast(result.reason || "You cannot rule on that.");
+      save();
+      renderRecord();
+      return;
+    }
+    const settle = target?.closest(".resolve-dilemma");
+    if (settle) {
+      const el = /** @type {any} */ (settle);
+      const result = resolveDilemma(world, el.dataset.id, el.dataset.choice);
+      if (!result.ok) toast(result.reason || "You cannot settle that.");
+      save();
+      renderRecord();
+      return;
+    }
+    const whisper = target?.closest(".act-whisper");
+    if (whisper) {
+      const result = actOnWhisper(world, /** @type {any} */ (whisper).dataset.id);
+      if (!result.ok) toast(result.reason || "You cannot act on that.");
+      save();
+      renderRecord();
+      return;
+    }
+
     const secretButton = target?.closest(".follow-secret-thread");
     if (secretButton) followThread("secret", secretButton.dataset.secret);
     const pairButton = target?.closest(".follow-pair-thread");

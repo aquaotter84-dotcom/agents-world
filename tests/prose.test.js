@@ -63,6 +63,14 @@ function runs(ticks) {
             });
             continue;
           }
+          if (moment.kind === "petition" || moment.kind === "whisper") {
+            const offered = /** @type {any} */ (moment.context).petitionable || [];
+            const pick = offered[i % Math.max(1, offered.length)];
+            resolveMoment(world, moment.id, moment.kind === "petition"
+              ? { ruleKind: pick?.ruleKind, petition: `Ask for ${pick?.name ?? "a change"} while it still matters.` }
+              : { whisper: "Something I would rather you heard from me than from the room." });
+            continue;
+          }
           const generated = moment.options.find(o => String(o.id).startsWith("new_goal"));
           const chosen = generated || moment.options[moment.options.length - 1];
           resolveMoment(world, moment.id, { optionId: chosen.id });

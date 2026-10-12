@@ -13,7 +13,7 @@
  * @property {string} id
  * @property {number} seq
  * @property {number} tick
- * @property {string} kind        act | contact | conflict | confide | gossip | secret | relationship | goal | triumph | level | world | death | betrayal | chronicle | proposal
+ * @property {string} kind        act | contact | conflict | confide | gossip | secret | relationship | goal | triumph | level | world | death | betrayal | chronicle | proposal | charter | role
  * @property {string|null} agentId
  * @property {string|null} subjectId
  * @property {string} text
@@ -28,6 +28,7 @@
  *   A model-authored approach and the engine's verdict on it. Only present on
  *   `proposal` events, and only ever as a record — nothing reads it back to
  *   drive the simulation.
+ * @property {{id: string, name: string}} [role]  Present on `role` events: the name the world started using.
  */
 
 import { clamp } from "../config.js";
@@ -57,7 +58,8 @@ export function logEvent(world, event) {
     projectId: event.projectId,
     relationship: event.relationship,
     authored: event.authored,
-    proposal: event.proposal
+    proposal: event.proposal,
+    role: event.role
   };
   if (event.scene && event.scene.length) full.scene = event.scene;
   world.events.unshift(full);

@@ -314,6 +314,44 @@ export const DEFAULT_CONFIG = {
     interferenceResentmentFloor: 22
   },
 
+  charter: {
+    /**
+     * The world's customs. A mind may petition the keeper for a change, minds
+     * whisper to the keeper, roles emerge from what minds are actually seen
+     * doing, and every ruling the keeper makes becomes precedent that shapes
+     * what the engine will validate next time.
+     */
+    enabled: true,
+    /** A mind may petition this often, in world ticks. */
+    petitionIntervalTicks: 48,
+    /** How many petitions may wait on the keeper at once. */
+    maxOpenPetitions: 3,
+    /** Ticks before an unanswered petition lapses. */
+    petitionLapseTicks: 96,
+    /** Influence regained per day kept, up to the cap. */
+    influencePerDay: 4,
+    /** Influence granted for ruling on a petition, enacted or not. */
+    influencePerRuling: 3,
+    whispersEnabled: true,
+    /** A mind may whisper this often, in world ticks. */
+    whisperIntervalTicks: 72,
+    maxOpenWhispers: 2,
+    /** Influence the keeper spends to act on something they were told in private. */
+    actOnWhisperCost: 6,
+    /** Influence the keeper spends to settle a dilemma. */
+    dilemmaCost: 10,
+    /** Ticks of no wall work before the stall becomes the keeper's problem. */
+    dilemmaStagnantTicks: 120,
+    /** How far ahead of the field a mind must be before a role is minted. */
+    roleLeadMargin: 6,
+    /** The smallest observed pattern that can earn a role at all. */
+    roleMinWeight: 8,
+    /** How many roles the world will recognise at once. */
+    maxRoles: 6,
+    /** Ticks between two dilemmas being raised. */
+    dilemmaIntervalTicks: 168
+  },
+
   proposals: {
     /**
      * Proposal-based minds. When a mind acts on its own goal, the model proposes
