@@ -18,6 +18,7 @@ import { createNorthWallProject } from "./projects.js";
 import { createCharter } from "./charter.js";
 import { createWant } from "./want.js";
 import { createMourning } from "./mourning.js";
+import { createDivine } from "./divine.js";
 
 /**
  * @typedef {import("./agent.js").Agent} Agent
@@ -140,6 +141,7 @@ import { createMourning } from "./mourning.js";
  * @property {import("./charter.js").Charter} charter  Traditions, laws, roles, precedents, petitions.
  * @property {import("./want.js").Want} want  The keeper's own score: harmony, prosperity, legacy.
  * @property {import("./mourning.js").Mourning} mourning  Funerals still coming, and the memorials of the lost.
+ * @property {import("./divine.js").Divine} divine      Apparitions, omens and blessings: how the keeper is felt without speaking.
  * @property {Moment[]} pending     Emitted moments awaiting a model answer.
  * @property {Moment[]} resolved    Moments that have been answered and applied.
  * @property {number} seq
@@ -238,6 +240,7 @@ export function createWorld(opts = {}) {
     charter: createCharter(),
     want: createWant(),
     mourning: createMourning(),
+    divine: createDivine(),
     pending: [],
     resolved: [],
     seq: 0,

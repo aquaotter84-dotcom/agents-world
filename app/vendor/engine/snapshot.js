@@ -16,6 +16,7 @@ import { createNorthWallProject } from "./model/projects.js";
 import { normalizeCharter } from "./model/charter.js";
 import { normalizeWant } from "./model/want.js";
 import { normalizeMourning } from "./model/mourning.js";
+import { normalizeDivine } from "./model/divine.js";
 import { createCognitionState, createProposalState } from "./model/agent.js";
 
 /**
@@ -39,6 +40,9 @@ const PERSISTED = [
   "want",
   // Funerals still coming and the memorials of everyone the world has lost.
   "mourning",
+  // Signs the keeper has already set: which targets are lit, which regions are
+  // under an omen, and how long each has left to bite.
+  "divine",
   "pending",
   "resolved",
   "chronicle",
@@ -102,6 +106,9 @@ export function deserializeWorld(input) {
   world.want = normalizeWant(data.want);
   // A world saved before anyone had died has an empty mourning chronicle.
   world.mourning = normalizeMourning(data.mourning);
+  // A world saved before the keeper had any way to be felt has never been
+  // visited — no signs, no cooldowns, nothing to expire.
+  world.divine = normalizeDivine(data.divine);
   const pilotCount = Math.max(0, Math.floor(world.config.cognition.pilotCount));
   const interval = Math.max(1, world.config.cognition.planIntervalTicks);
   for (let index = 0; index < world.agents.length; index += 1) {

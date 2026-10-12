@@ -572,3 +572,30 @@ textarea { resize: vertical; min-height: 56px; }
 .radial-item.disabled { opacity: .38; border-color: rgba(255,255,255,.14); }
 .radial-label { display: block; text-align: center; }
 @keyframes radial-pop { from { opacity: 0; scale: .82; } to { opacity: 1; scale: 1; } }
+
+/* ---- the keeper's hand: gods don't chat, they act ---- */
+.hand-card { display: grid; gap: 8px; padding: 10px 14px; }
+.hand-card .hand-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.hand-card .hand-head .eyebrow { margin: 0; }
+.hand-influence { font-size: 12px; color: #f3d9a4; }
+.hand-acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.hand-act {
+  display: grid; gap: 3px; text-align: left; padding: 8px 10px;
+  border-radius: 10px; border: 1px solid rgba(243,217,164,.28);
+  background: rgba(243,217,164,.05); color: #ece8dd;
+  font: 400 12px/1.35 system-ui;
+}
+.hand-act:hover { border-color: rgba(243,217,164,.6); }
+.hand-act:disabled { opacity: .55; border-color: rgba(255,255,255,.12); background: rgba(255,255,255,.03); }
+.hand-act .ha-top { display: flex; justify-content: space-between; gap: 6px; align-items: baseline; }
+.hand-act .ha-name { font-weight: 700; }
+.hand-act .ha-live { font-weight: 400; color: #9a9aa8; }
+.hand-act .ha-cost { color: #9a9aa8; white-space: nowrap; }
+.hand-act .ha-why { color: #9a9aa8; }
+.hand-foot { margin: 0; font-size: 11px; color: #9a9aa8; }
+
+/* ---- signs in the charter: what the keeper did without saying anything ---- */
+.sign-card { display: grid; gap: 4px; border-color: rgba(196,170,240,.35); }
+.sign-card.live { background: rgba(196,170,240,.07); }
+.sign-card p { margin: 0; }
+.sign-card .note { display: block; }

@@ -30,6 +30,7 @@ import { settleNeeds, checkCollapse } from "./systems/needs.js";
 import { settleRelations, settleProximity, hatchSecrets } from "./systems/social.js";
 import { settleTurnover } from "./systems/turnover.js";
 import { settleMourning } from "./systems/mourning.js";
+import { settleDivine } from "./systems/divine.js";
 import { settleRituals } from "./systems/rituals.js";
 import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
@@ -199,6 +200,9 @@ export function step(world) {
   settleRituals(world);
   trackFeuds(world);
   settleCharter(world);
+  // Signs the keeper has already set take their bite here, after every system
+  // that could have produced a fresh quarrel this tick.
+  settleDivine(world);
   maybeRaiseDilemma(world);
   // Systems queue ops rather than applying them mid-pass, so that nothing here
   // can mutate an agent halfway through another system's read of it.

@@ -244,6 +244,62 @@ export const DEFAULT_CONFIG = {
     graveWindowTicks: 144
   },
 
+  divine: {
+    /**
+     * Gods don't chat: how the keeper is present without saying anything.
+     *
+     * Three interventions, each aimed at something the world already has —
+     * a mind, the region it stands in, the work on the wall, a dilemma already
+     * on the table — and each paid for out of the same influence the charter
+     * runs on. The prices are the point: at `charter.influencePerDay` a day
+     * kept pays for one blessing and part of an omen, so a keeper who wants to
+     * appear at a dilemma has to have been saving for it.
+     *
+     * Every window below is a range in ticks (48 ticks = one world day) during
+     * which the intervention still bites. After that it stops, and only the
+     * mark and the record go on.
+     */
+    enabled: true,
+
+    /** The blessing: a light on a mind, or on the work itself. */
+    blessingCost: 5,
+    blessingWindowTicks: 48,
+    /** What it does to a mind the moment it lands. */
+    blessingLift: 14,
+    blessingStanding: 6,
+    blessingMoodLevel: 8,
+    /** While it holds, that mind's — or everyone's — wall work goes this much further. */
+    blessingWorkBonus: 0.35,
+    /** Cooldown per target: a mind already lit cannot be lit again while it holds. */
+
+    /** The omen: a sign over a region, before the feud flashes. */
+    omenCost: 7,
+    omenWindowTicks: 72,
+    /** Awe, the moment it appears: meaning up, mood cooled, and — a real
+     * brake, not a feeling — everyone feuding in that region becomes more
+     * frightened of the person they are feuding with. */
+    omenFear: 6,
+    omenMeaning: 2,
+    omenMoodLevel: -3,
+    /** Resentment between minds in the region cools by this much per tick. */
+    omenCoolPerTick: 0.12,
+    /** How much harder it is to choose a confrontation while standing under it. */
+    omenDeterrence: 30,
+
+    /** The apparition: the keeper stands at a dilemma, and says nothing. */
+    apparitionCost: 12,
+    /** What the parties' mutual resentment loses. */
+    apparitionResentment: -30,
+    apparitionStanding: 2,
+    apparitionMeaning: 6,
+    apparitionMoodLevel: -4,
+
+    /** How long the board keeps drawing a mark after the effect has ended. */
+    markWindowTicks: 48,
+    /** Ticks between two uses of the same intervention, whatever the target. */
+    cooldownTicks: { omen: 24, blessing: 12, apparition: 48 }
+  },
+
   want: {
     /**
      * The keeper's own score: harmony, prosperity, legacy.
@@ -338,6 +394,12 @@ export const DEFAULT_CONFIG = {
       let_it_ride: { harmony: -1 },
       whisper: { harmony: -3, legacy: 2 },
       wall_raised: { prosperity: 12, legacy: 6, harmony: 6 },
+      // Gods don't chat. A blessing is the keeper's gentlest act and moves the
+      // shared work; an omen is a warning that buys quiet; an apparition is the
+      // most expensive thing a keeper can do, and it buys memory, not a ruling.
+      blessing: { prosperity: 3, harmony: 2 },
+      omen: { harmony: 3, legacy: 1 },
+      apparition: { legacy: 4, harmony: 4 },
       // Not keeper acts, but they move the same meters through the same choke
       // point, so a death is never invisible in the keeper's ledger either.
       funeral: { harmony: 2, legacy: 3 },

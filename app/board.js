@@ -13,7 +13,7 @@
  * rather than a matter of care.
  */
 
-import { feudStage, wantSummary, WANT_LABELS, meterWord, pendingFunerals } from "./vendor/engine/index.js";
+import { feudStage, wantSummary, WANT_LABELS, meterWord, pendingFunerals, markedInterventions } from "./vendor/engine/index.js";
 
 /**
  * @typedef {import("./vendor/engine/model/world.js").World} World
@@ -204,6 +204,59 @@ export function mourningMarks(world) {
 }
 
 /**
+ * What the keeper has already done to the world, and where.
+ *
+ * Apparitions, omens and blessings are the keeper's only way of being felt
+ * without speaking, so each one leaves a mark where it landed: a sign over the
+ * region it hung above, a halo on the mind — or the wall — it was aimed at, a
+ * pillar where the keeper stood while two minds were about to have the worst
+ * conversation of their lives. A mark is drawn while its window is open and
+ * lingers, dimmed, for a while after, so the board can be read after the fact.
+ *
+ * @param {World} world
+ * @returns {{kind: "omen"|"blessing"|"apparition", id: string, target: string, agentId: string|null, subjectId: string|null, regionId: string|null, dilemmaId: string|null, label: string, effect: string, text: string, cost: number, tick: number, live: boolean}[]}
+ */
+export function divineMarks(world) {
+  const divine = world.divine;
+  if (!divine) return [];
+  const tick = world.clock.tick;
+  const nameOf = (/** @type {string|null} */ id) =>
+    (id && world.agents.find((/** @type {any} */ a) => a.id === id)?.name) || null;
+  const regionOf = (/** @type {string|null} */ id) =>
+    (id && world.regions.find((/** @type {any} */ r) => r.id === id)?.name) || null;
+
+  /** @type {ReturnType<typeof divineMarks>} */
+  const out = [];
+  for (const iv of markedInterventions(divine, tick)) {
+    const kind = /** @type {"omen"|"blessing"|"apparition"} */ (iv.kind);
+    const who = nameOf(iv.agentId);
+    const other = nameOf(iv.subjectId);
+    const where = regionOf(iv.regionId);
+    const label = kind === "omen"
+      ? "a sign over " + (where || "the world")
+      : kind === "blessing"
+        ? iv.target === "work" ? "a light on the wall work" : "a light on " + (who || "a mind")
+        : "the keeper stood where " + (who && other ? who + " and " + other : who || "they") + " were";
+    out.push({
+      kind,
+      id: iv.id,
+      target: iv.target,
+      agentId: iv.agentId ?? null,
+      subjectId: iv.subjectId ?? null,
+      regionId: iv.regionId ?? null,
+      dilemmaId: iv.dilemmaId ?? null,
+      label,
+      effect: iv.effect,
+      text: iv.text,
+      cost: iv.cost,
+      tick: iv.tick,
+      live: tick < iv.expireTick
+    });
+  }
+  return out;
+}
+
+/**
  * The keeper's own board: three rings, one per meter.
  *
  * Harmony, prosperity and legacy are the keeper's score, and a score that only
@@ -248,6 +301,10 @@ export function describeBoard(world) {
   const palette = projectPalette(world);
   const ring = keeperRing(world);
   const want = ring.meters.map(m => `${m.label.toLowerCase()} ${Math.round(m.value)} (${m.word})`).join(", ");
+  const signs = divineMarks(world);
+  const signLine = signs.length
+    ? `${signs.length} sign${signs.length === 1 ? "" : "s"} of the keeper's still standing (${signs.map(m => m.kind).join(", ")})`
+    : "the keeper has left no sign on the world yet";
   const marks = mourningMarks(world);
   const called = marks.filter(m => m.kind === "funeral");
   const graves = (world.mourning?.memorials || []).filter(m => m.kind === "death").length;
@@ -261,6 +318,7 @@ export function describeBoard(world) {
     `${feudArcs(world).length} feud arc${feudArcs(world).length === 1 ? "" : "s"}`,
     `the wall at ${Math.round(palette.progress)}%${palette.complete ? " and standing" : ""}`,
     mourningLine,
+    signLine,
     `the keeper's want: ${want}${ring.fallen ? " (the world has gone quiet)" : ""}`
   ].join(" · ");
 }

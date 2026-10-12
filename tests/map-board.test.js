@@ -17,6 +17,8 @@ import { JSDOM } from "jsdom";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const html = await readFile(resolve(ROOT, "app/index.html"), "utf8");
+/** How big the stubbed board is. Everything in this file is in those pixels. */
+const SIDE = 200;
 
 /** A recording stand-in for a 2D context: every call is logged, nothing draws. */
 function stubCtx(/** @type {any[]|null} */ log) {
@@ -50,6 +52,17 @@ async function bootApp({ savedState = null, log = null } = {}) {
   const window = /** @type {any} */ (dom.window);
   window.HTMLCanvasElement.prototype.getContext = () => stubCtx(log);
   window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  // jsdom reports every document as hidden, and the map only paints while
+  // somebody is looking at it. The board has to actually draw for the marks the
+  // keeper left to be on it — which is exactly the thing under test.
+  Object.defineProperty(window.document, "hidden", { value: false, configurable: true });
+  // jsdom lays nothing out, so every element is 0x0 and the board would clamp
+  // itself to a 50px postage stamp where every orb is within reach of every
+  // other point. Give the map a real rectangle to draw on.
+  window.Element.prototype.getBoundingClientRect = () => ({
+    width: SIDE, height: SIDE, left: 0, top: 0, right: SIDE, bottom: SIDE, x: 0, y: 0,
+    toJSON() { return {}; }
+  });
   if (savedState) window.localStorage.setItem("agentsworld.v2", JSON.stringify(savedState));
 
   let frames = 0;
@@ -181,6 +194,38 @@ async function storedWorldWithMourning() {
   };
 }
 
+
+/**
+ * A stored world the keeper has already been felt in: a sign hanging over the
+ * North Wall, and a place where the keeper stood between two minds who were
+ * about to have the worst conversation of their lives.
+ */
+async function storedWorldWithSigns() {
+  const { createWorld } = await import("../engine/model/world.js");
+  const { serializeWorld } = await import("../engine/snapshot.js");
+  const { performIntervention } = await import("../engine/systems/divine.js");
+  const world = createWorld({ seed: 4244 });
+  const a = world.agents[0];
+  const b = world.agents[1];
+  b.regionId = a.regionId;
+  world.charter.dilemmas.push({
+    id: "dil-sign", text: "Two minds, one grievance.", partyIds: [a.id, b.id],
+    kind: "feud", tick: world.clock.tick, status: "open"
+  });
+  // Two signs the keeper has already left — a sign over the wall and a place
+  // where the keeper stood — and the blessing still unspent, because the act
+  // that is tested from the panel is spending it.
+  const omen = performIntervention(world, "omen", { regionId: "wall" });
+  const apparition = performIntervention(world, "apparition", {});
+  if (!omen.ok || !apparition.ok) throw new Error("the fixture's interventions must land");
+  const worldJson = JSON.parse(serializeWorld(world));
+  return {
+    world: JSON.stringify(worldJson), settings: {}, chats: {}, chatRoles: {}, ui: {},
+    keeper: { marks: [], xp: 0 }, lastSeenAt: Date.now(),
+    influence: worldJson.charter.influence, blessed: a.name
+  };
+}
+
 /* ------------------------------------------------------------------ */
 
 test("the board tells the keeper what a tap-and-hold will get them", async () => {
@@ -193,19 +238,22 @@ test("the board tells the keeper what a tap-and-hold will get them", async () =>
   } finally { restore(); }
 });
 
-test("a tap-and-hold opens the four keeper moves", async () => {
+test("a tap-and-hold opens the keeper's moves, including the three that say nothing", async () => {
   const { window, document: doc, restore } = await bootApp();
   try {
     const cv = $(doc, "#world-canvas");
     const Mouse = window.MouseEvent;
-    // Everything sits inside the stubbed 50x50 canvas, so the origin is on the board.
+    // The origin corner is on the board and near nothing else on it.
     cv.dispatchEvent(new Mouse("mousedown", { clientX: 5, clientY: 5, bubbles: true }));
     await new Promise(r => setTimeout(r, 520));
 
     const menu = $(doc, "#radial-menu");
     assert.ok(!menu.classList.contains("hidden"), "holding the board should open the menu");
     const labels = $$(doc, "#radial-menu .radial-item").map(b => b.textContent.trim());
-    assert.deepEqual(labels.sort(), ["Answer petition", "Dossier", "Follow thread", "Whisper"]);
+    // The board itself is always a region, so an omen is always one gesture
+    // away; blessing and appearing need a mind or a dilemma under the press and
+    // are not offered where they could not land.
+    assert.deepEqual(labels.sort(), ["Answer petition", "Dossier", "Follow thread", "Set omen", "Whisper"]);
   } finally { restore(); }
 });
 
@@ -218,11 +266,12 @@ test("the menu disables what the world cannot currently honour, and enables what
     await new Promise(r => setTimeout(r, 520));
 
     const items = $$(doc, "#radial-menu .radial-item");
-    assert.equal(items.length, 4);
     const byAct = new Map(items.map(b => [b.dataset.act, b]));
-    for (const act of ["whisper", "petition", "thread", "dossier"]) {
+    for (const act of ["whisper", "petition", "thread", "dossier", "omen"]) {
       assert.ok(byAct.has(act), `the menu offers ${act}`);
     }
+    assert.ok(!byAct.has("blessing"), "a blessing is offered on a mind, not on empty board");
+    assert.ok(!byAct.has("apparition"), "and an apparition only where a dilemma is burning");
     // A tap on empty board hits nobody, so the mind-scoped moves are honest
     // about having nothing to act on; the petition is world-wide and stays live.
     const petitionItem = /** @type {any} */ (byAct.get("petition"));
@@ -256,6 +305,69 @@ test("a tap still opens a dossier, and the radial closes when anything else take
   } finally { restore(); }
 });
 
+
+test("the keeper's hand is on the World screen: priced, aimed and spendable", async () => {
+  const saved = await storedWorldWithSigns();
+  const { document: doc, restore } = await bootApp({ savedState: saved });
+  try {
+    const hand = $(doc, "#hand-card");
+    assert.ok(hand, "the keeper's hand is not buried in a tab");
+    const acts = $$(doc, "#hand-card .hand-act");
+    assert.deepEqual(acts.map(b => /** @type {any} */ (b).dataset.act), ["blessing", "omen", "apparition"]);
+    const prices = text(doc, "hand-card");
+    for (const price of ["5 influence", "7 influence", "12 influence"]) {
+      assert.ok(prices.includes(price), `the hand quotes ${price}`);
+    }
+
+    // Two acts in the fixture cost 19 of 30 influence, so the most expensive
+    // one cannot be afforded — and the panel says so with the arithmetic in it.
+    const apparition = /** @type {HTMLButtonElement} */ (acts.find(b => /** @type {any} */ (b).dataset.act === "apparition"));
+    assert.equal(apparition.disabled, true, "an unaffordable act is disabled, not hidden");
+    assert.match(apparition.textContent || "", /costs 12 influence and you have 11/);
+
+    // The blessing has nothing selected to aim at, so it falls back to the work
+    // on the wall — and spending it moves both the influence and the board.
+    const before = Number((text(doc, "hand-card").match(/(\d+) influence/) || [])[1]);
+    assert.equal(before, saved.influence);
+    const blessing = /** @type {HTMLButtonElement} */ (acts.find(b => /** @type {any} */ (b).dataset.act === "blessing"));
+    assert.equal(blessing.disabled, false);
+    blessing.click();
+
+    const saved2 = JSON.parse(JSON.parse(doc.defaultView.localStorage.getItem("agentsworld.v2")).world);
+    assert.equal(saved2.charter.influence, before - 5, "the hand charges what it quotes");
+    const spent = saved2.divine.interventions.filter((/** @type {any} */ i) => i.kind === "blessing");
+    assert.equal(spent.length, 1, "and the world keeps the sign");
+    assert.equal(spent[0].target, "work", "aimed at the wall, since no mind was selected");
+    // And the record keeps it: signs are a page in the charter, not a whisper.
+    $$(doc, "#record-tabs .rtab").find(t => t.dataset.view === "charter").click();
+    const pane = text(doc, "record-pane");
+    assert.match(pane, /Signs and blessings/);
+    assert.match(pane, /quarrels in the North Wall cool/, "each sign says what it did");
+    assert.match(pane, /no law was written/, "including the one where nothing was said at all");
+  } finally { restore(); }
+});
+
+test("a sign the keeper left is a mark on the board, and a tap reads it back", async () => {
+  const saved = await storedWorldWithSigns();
+  const { window, document: doc, restore } = await bootApp({ savedState: saved });
+  try {
+    // The omen is drawn where the board draws it: a ring over the region it was
+    // set over, with the eye of the sign above it. The North Wall sits at
+    // (55%, 76%), and the eye rides 32px above the region's own mark.
+    const at = { x: (55 / 100) * SIDE, y: (76 / 100) * SIDE - 32 };
+    const cv = $(doc, "#world-canvas");
+    const Mouse = window.MouseEvent;
+    cv.dispatchEvent(new Mouse("mousedown", { clientX: at.x, clientY: at.y, bubbles: true }));
+    cv.dispatchEvent(new Mouse("mouseup", { clientX: at.x, clientY: at.y, bubbles: true }));
+    // Tapping a sign never opens a dossier: it says what the keeper did, and
+    // takes them to the record where the act is written down.
+    assert.ok($(doc, "#mind-sheet").classList.contains("hidden"), "a sign is not a mind");
+    assert.match(text(doc, "toast"), /Your omen/, "the board says what the sign was");
+    assert.match(text(doc, "record-pane"), /Signs and blessings/);
+    assert.match(text(doc, "record-pane"), /North Wall/, "and where it was set");
+  } finally { restore(); }
+});
+
 test("the keeper's want is on the board, not buried in a tab", async () => {
   const { document: doc, restore } = await bootApp();
   try {
@@ -282,10 +394,10 @@ test("tapping the keeper's crown opens their standing, wherever else the board i
   try {
     const cv = $(doc, "#world-canvas");
     const Mouse = window.MouseEvent;
-    // In the stubbed 50x50 board the crown sits at (6, 42) — the map's top-right
-    // corner — and it reads before any orb, sigil or thread does.
-    cv.dispatchEvent(new Mouse("mousedown", { clientX: 6, clientY: 42, bubbles: true }));
-    cv.dispatchEvent(new Mouse("mouseup", { clientX: 6, clientY: 42, bubbles: true }));
+    // The crown sits in the map's top-right corner — it reads before any orb,
+    // sigil or thread does.
+    cv.dispatchEvent(new Mouse("mousedown", { clientX: SIDE - 44, clientY: 42, bubbles: true }));
+    cv.dispatchEvent(new Mouse("mouseup", { clientX: SIDE - 44, clientY: 42, bubbles: true }));
     assert.match(text(doc, "record-pane"), /The keeper/, "the crown opens the keeper's record");
   } finally { restore(); }
 });

@@ -19,6 +19,7 @@ import { remember } from "../model/memory.js";
 import { logEvent } from "../model/events.js";
 import { learnSecret, publishSecret, createSecret, agentById, privateSecretsHeld } from "../model/world.js";
 import { ruleStrength } from "../model/charter.js";
+import { liveBlessingForAgent, liveBlessingForWork } from "../model/divine.js";
 import { recordWallRaised } from "./charter.js";
 
 /**
@@ -159,9 +160,16 @@ function applyProjectWork(world, op, tick) {
   const project = world.project;
   const actor = agentById(world, op.agent);
   if (!project || project.status !== "active" || !actor || actor.retired) return null;
-  // An enacted "the wall comes first" makes the same effort go further. The
-  // bonus is the engine's, from the rule's strength — never the model's.
-  const bonus = 1 + ruleStrength(world.charter, "wall_first") * 0.15;
+  // An enacted "the wall comes first" makes the same effort go further, and so
+  // does a blessing the keeper set on the work — or on this mind's own hands.
+  // Both bonuses are the engine's, from state it already keeps, never the
+  // model's.
+  const blessed = Boolean(
+    liveBlessingForWork(world.divine, tick) || liveBlessingForAgent(world.divine, tick, actor.id)
+  );
+  const bonus =
+    (1 + ruleStrength(world.charter, "wall_first") * 0.15) *
+    (blessed ? 1 + world.config.divine.blessingWorkBonus : 1);
   const amount = clamp(Math.round((Number(op.amount) || 0) * bonus), 1, 24);
   const record = project.contributors[actor.id] || (project.contributors[actor.id] = {
     work: 0, help: 0, interference: 0, lastTick: tick
