@@ -352,7 +352,14 @@ export function buildPrompt(world, moment) {
 export function parseReply(raw, moment) {
   if (!raw) return {};
   if (moment.kind === "cognition") return parseCognitionReply(raw);
-  if (moment.kind === "goal_approach") return parseApproachReply(raw);
+  if (moment.kind === "goal_approach") {
+    // The loose scan looks for the approaches actually offered to this mind,
+    // not the whole grammar — the prompt promised a shorter list.
+    const offered = Array.isArray(moment.context?.availableMethods)
+      ? /** @type {string[]} */ (moment.context.availableMethods)
+      : undefined;
+    return parseApproachReply(raw, offered);
+  }
   if (moment.kind === "petition") return parseCharterReply(raw, "petition", "ruleKind");
   if (moment.kind === "whisper") return parseCharterReply(raw, "whisper");
   const text = String(raw).trim();
@@ -450,8 +457,10 @@ const NOT_AN_APPROACH = /\bas an ai\b|\blanguage model\b|\bi (can'?t|cannot|am u
 
 /**
  * Parse a proposal answer: an approach in the mind's own words plus one token
- * from the grammar. If no METHOD line arrives, the prose is scanned for a token
- * so a slightly reworded reply still lands instead of being thrown away.
+ * from the grammar. If no METHOD line arrives, the prose is scanned for a
+ * token — exact first, then by stem — so a reworded reply ("the day went to
+ * the organising of it") still lands instead of being thrown away as "No
+ * approach method was proposed".
  * @param {string|null} raw
  * @param {string[]} [offered]
  * @returns {{approach?: string, method?: string, thought?: string}}
@@ -475,7 +484,15 @@ export function parseApproachReply(raw, offered) {
   let method = field("METHOD").toLowerCase().replace(/[\s-]+/g, "_");
   if (!method) {
     const grammar = offered && offered.length ? offered : Object.keys(APPROACH_GLOSS);
-    method = grammar.find(token => new RegExp(`\\b${escapeRegex(token.replace(/_/g, "[ _-]"))}\\b`, "i").test(text)) || "";
+    method =
+      // An exact token in the prose, first.
+      grammar.find(token => new RegExp(`\\b${escapeRegex(token.replace(/_/g, "[ _-]"))}\\b`, "i").test(text))
+      // Then the token's stem, so an inflected or extended word ("the day
+      // went to the organising of it", "a short, quiet bit of undermine")
+      // still lands. Without this the reworded reply dies as "No approach
+      // method was proposed" — the old build's rejection in a new coat.
+      || grammar.find(token => new RegExp(`\\b${escapeRegex(approachStem(token))}`, "i").test(text))
+      || "";
   }
   if (method) out.method = method;
   if (!out.approach) {
@@ -537,6 +554,20 @@ function tidy(s) {
 /** @param {string} s */
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The matchable stem of an approach token, for the loose prose scan only.
+ * The first word of a multi-word token carries the match ("push through" →
+ * "push"), and words of six letters or more are cut to six so that inflected
+ * or extended forms still prefix-match ("organise" → "organis" finds
+ * "organising", "undermine" → "underm" finds "undermining"). The nine stems
+ * are distinct from one another, which is what keeps a prefix match safe.
+ * @param {string} token
+ */
+function approachStem(token) {
+  const word = String(token).split(/[ _\-]+/)[0] || String(token);
+  return word.length >= 6 ? word.slice(0, 6) : word;
 }
 
 /** @param {string} className */
