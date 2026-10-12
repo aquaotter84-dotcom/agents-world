@@ -155,7 +155,12 @@ export function generateIntents(world, agent) {
     // the whole world ends up standing in one room.
     const hasCompanyHere = here.length > 0;
     if (hasCompanyHere) {
-      const preferred = pickCompanion(world, agent, here, byId);
+      // Prefer somebody this mind has not just been with. In a room of six, the
+      // difference between "talk to my favourite" and "talk to somebody I have
+      // not seen all day" is the difference between one pair filling the record
+      // and the whole room having a life.
+      const rested = here.filter(o => tick - (edgeToward(agent, o.id).lastContactTick ?? -9999) >= cfg.social.pairCooldownTicks);
+      const preferred = pickCompanion(world, agent, rested.length ? rested : here, byId);
       if (preferred) {
         const edge = edgeToward(agent, preferred.id);
         const reasons = [];
@@ -173,15 +178,14 @@ export function generateIntents(world, agent) {
           reasons.push(`things are awkward with ${preferred.name}`);
         }
         // You do not have a deep conversation with the same person every half
-        // hour. Without this dampener, two minds who like each other spend the
-        // entire day locked in one unbroken exchange and nothing else in the
-        // world gets to happen to either of them.
-        const sinceTalk = tick - (edge.lastContactTick ?? -9999);
-        if (sinceTalk < 4) {
-          score -= 26;
+        // hour. The same pair cooldown that keeps gossip from filling the record
+        // applies here: two minds who were just together leave each other, and
+        // the day, alone for a while. Without it they lock into one unbroken
+        // exchange and nothing else in the world happens to either of them.
+        const sinceTogether = tick - (edge.lastContactTick ?? -9999);
+        if (sinceTogether < cfg.social.pairCooldownTicks) {
+          score -= 40;
           reasons.push(`just spoke with ${preferred.name}`);
-        } else if (sinceTalk < 8) {
-          score -= 11;
         }
         if (connection.urgency > 0) {
           score += 28 * connection.urgency;
@@ -279,21 +283,27 @@ export function generateIntents(world, agent) {
           tick - t.tick <= 30
       );
 
-      if ((gossipable.length || opinions.length) && edge.familiarity > 5) {
+      const talk = cfg.social.talkScoring;
+      // Two minds who spoke an hour ago do not need to speak again. Without
+      // this, the pair with the deepest familiarity set the tone of the whole
+      // record: every tick, one more line of conversation, and no room left in
+      // the day for work or weather or walking somewhere new.
+      const sinceTalk = tick - (edge.lastContactTick ?? -9999);
+      if (sinceTalk >= cfg.social.pairCooldownTicks && (gossipable.length || opinions.length) && edge.familiarity > 5) {
         const reasons = [];
         // Passing on a secret is the potent version; merely having a view about
         // somebody is the ordinary one, and should not crowd out everything else.
-        let score = 9 + WEIGHTS.driveSocial * (agent.drives.social / 100) * 0.6;
+        let score = talk.base + WEIGHTS.driveSocial * (agent.drives.social / 100) * 0.6;
         if (gossipable.length) {
-          score += 13 + gossipable.length * 6;
+          score += talk.secretBonus + gossipable.length * talk.secretPerSecret;
           reasons.push("has heard something");
         } else {
-          score += 2;
+          score += talk.opinion;
           const aboutName = opinions[0].subjectId ? byId.get(opinions[0].subjectId)?.name : null;
           reasons.push(`has opinions about ${aboutName || "someone"}`);
         }
         if (edge.affinity > 20) {
-          score += 8;
+          score += talk.friendBonus;
           reasons.push(`${target.name} is a friend`);
         }
         if (agent.drives.social > 70) reasons.push("cannot resist telling it");

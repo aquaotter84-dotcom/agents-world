@@ -119,7 +119,41 @@ export const DEFAULT_CONFIG = {
      */
     confideIntervalTicks: 26,
     /** Multiplier applied to affinity change when the interaction is a first meeting. */
-    firstMeetingMultiplier: 1.6
+    firstMeetingMultiplier: 1.6,
+    /**
+     * How strongly each kind of talk pulls at a mind, and how often it may happen.
+     *
+     * Ordinary opinion — what a mind thinks of somebody who is not in the room —
+     * is the cheapest social act there is: it needs nothing but company and a
+     * memory. When it scored within a couple of points of everything else it won
+     * most ticks by default, and half of every day in the feed was small talk.
+     * Secrets are still the potent version; having a view about somebody is now
+     * a choice rather than the world's resting state.
+     */
+    talkScoring: {
+      /** Base pull of the gossip intent, before secrets, opinions or friendship. */
+      base: 9,
+      /** Added when there is nothing but an opinion to share. */
+      opinion: 6,
+      /** Added for having a secret worth passing on, once. */
+      secretBonus: 13,
+      /** Added per secret the speaker could pass on. */
+      secretPerSecret: 6,
+      /** Added when the listener passes for a friend. */
+      friendBonus: 8
+    },
+    /**
+     * Ticks before the same two minds spend time together again.
+     *
+     * A conversation is an event; a pair who talk every single tick are not
+     * having one, they are filling the log. Twelve ticks is a quarter of a world
+     * day — often enough that news still travels and friendships still deepen,
+     * rare enough that the day has room in it for work, wandering and trouble.
+     *
+     * This governs both halves of being together: seeking each other's company,
+     * and talking about somebody who is not there.
+     */
+    pairCooldownTicks: 12
   },
 
   progression: {

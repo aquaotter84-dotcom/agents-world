@@ -113,6 +113,7 @@ import { neutralEdge } from "./relationships.js";
  * @property {number} [chronicleMark] Tick at which the last day summary was written.
  * @property {Record<string, any>} [flags] Diagnostics, e.g. the last failed effect.
  * @property {object[]} [pendingOps] Ops queued by a system and applied at the end of the tick.
+ * @property {Record<string, string[]>} [proseMemory] Recently used narration, per pool — what stops the feed repeating itself.
  * @property {(kind: string) => string} nextId
  */
 
@@ -200,6 +201,7 @@ export function createWorld(opts = {}) {
     seq: 0,
     idCounters: counters,
     chronicle: [],
+    proseMemory: {},
     nextId
   };
 
@@ -538,6 +540,25 @@ export function secretTextFor(secret, fidelity) {
   // The listener is getting almost nothing. Every secret begins with a name,
   // so the clause slots into a sentence without ever being lower-cased.
   return `Nobody tells it the same way twice. Half of them say ${core}. The other half say it never happened.`;
+}
+
+/**
+ * The claim at the heart of a secret, stripped of any framing.
+ *
+ * `secretTextFor` returns a whole sentence with its own "they say that" around
+ * it, which is what a feed line wants when the fact stands alone. A retelling is
+ * different: the framing depends on who is doing the telling and how well they
+ * know the person they are telling, so the prose templates own the framing and
+ * this supplies only the claim that goes inside it.
+ *
+ * Every secret template begins with the holder's name (or a verb that takes one),
+ * so the claim is safe to slot in mid-sentence without being lower-cased.
+ *
+ * @param {Secret} secret
+ * @returns {string}
+ */
+export function secretClaimFor(secret) {
+  return secret.text.replace(/\.$/, "");
 }
 
 /**
