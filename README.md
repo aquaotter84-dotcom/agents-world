@@ -40,13 +40,28 @@ A BluesMinds key changes the *voice*, not the world: with one, a language model 
 
 While the app is open, each tick advances the whole world by 30 minutes. Every awake mind gets an engine decision on that tick unless it is waiting on one of the engine's bounded model moments; sleeping minds continue to recover energy and wake on their own at the configured threshold. The app's default is one tick every 45 seconds, so one world day (48 ticks) takes 36 real minutes at that speed. The headless runner has its own configurable wall-clock interval. The engine offers only its most significant beats to the model; anything unanswered within three ticks is decided by the engine. Given the same seed and the same recorded model answers, the simulation replays exactly.
 
+### The approach grammar, measured
+
+Proposal-based minds are the one place a model's voice could be swallowed silently: the old build answered a wall of `ENGINE FALLBACK`s, every proposal refused as "not in the engine's safe action grammar", so the model never actually steered anything. The fix had to be *demonstrable*, so it is measured rather than asserted.
+
+`npm run audit:proposals` (or `node tools/proposal-audit.mjs --seed 4711 --days 10`) runs a seeded world for ten world days and answers every proposal the engine offers, in the exact shape the prompt asks for, through the real prompt → parse → resolve pipeline. It answers four temperaments: a compliant model, a compliant model whose reply lands two ticks late (as it does in the app), a freehand model that buries the token in its prose with no `METHOD` line, and a misbehaving model that always proposes the unresolvable. Observed on seed 4711:
+
+| model | accepted | refused | refused by |
+| --- | --- | --- | --- |
+| compliant, reply same tick | 95/96 (99.0%) | 1 | "There is no one here for that." (company left) |
+| compliant, reply 2 ticks late | 93/96 (96.9%) | 3 | the world moved: region, company |
+| freehand, no METHOD line | 93/96 (96.9%) | 3 | the world moved — zero parse losses |
+| misbehaving ("summon a storm") | 0/87 (0.0%) | 87 | "not one of the approaches" — every one in the record |
+
+Why the old failure mode is unreachable now: the prompt offers exactly the subset of the grammar the engine can resolve from where the mind is standing, so a model that names an offered approach cannot be refused by the grammar or the parser — and the parser rescues reworded replies by stem. The refusals that do happen are honest: the world moved between the ask and the act (the mind's region changed, its company walked off), and each one is written into the record with its reason while the engine's fallback move keeps the mind acting. No invisible rejection loops. The rates are deterministic for a given seed, and `tests/proposal-acceptance.test.js` pins them, including the invariant that every proposal — accepted or refused — reaches the event record with a verdict and a reason.
+
 ## Layout
 
 - `engine/` — the simulation: pure, deterministic, no I/O, no wall clock
 - `server/` — the headless runner (`npm start`), the model client, the prompt builder
 - `app/` — vanilla web app, no build step (`index.html`, `styles.css`, `app.js`); the engine is vendored into `app/vendor/` by `tools/sync-vendor.sh`, which CI runs before every build
-- `tools/` — `serve.mjs` (dev server: `npm run dev`, `--sync` to re-vendor), `story.mjs` (print a day from an offline world), `sync-vendor.sh`
-- `tests/` — `npm test`. Engine behaviour (balance, determinism, the world's voice) plus `app-ui.test.js`, which boots the real `app/index.html` against the real vendored engine in jsdom, clicks the real buttons, and asserts that a world with no model in it still reads as a story
+- `tools/` — `serve.mjs` (dev server: `npm run dev`, `--sync` to re-vendor), `story.mjs` (print a day from an offline world), `proposal-audit.mjs` (the seeded proposal-acceptance audit), `sync-vendor.sh`
+- `tests/` — `npm test`. Engine behaviour (balance, determinism, the world's voice, proposal acceptance rates) plus `app-ui.test.js`, which boots the real `app/index.html` against the real vendored engine in jsdom, clicks the real buttons, and asserts that a world with no model in it still reads as a story
 - `deploy/` — Capacitor 7 Android shell (`appId com.patchesstudio.agentsworld`), workflow source copy in `deploy/workflows/`
 - `.github/workflows/android-apk.yml` — debug APK on every push (artifact: `agents-world-debug-apk`)
 
