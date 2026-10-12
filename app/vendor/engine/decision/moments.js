@@ -14,10 +14,10 @@
 
 import { clamp } from "../config.js";
 import { recall } from "../model/memory.js";
-import { edgeToward, relationPhrase, describeRelation } from "../model/relationships.js";
+import { edgeToward, relationPhrase, describeRelation, feudStage } from "../model/relationships.js";
 import { regionById, regionName, agentById } from "../model/world.js";
 import { GOAL_IDEAS } from "../content.js";
-import { stateLine, moodWord } from "../model/agent.js";
+import { stateLine, moodWord, standingWord } from "../model/agent.js";
 import { isNight } from "../clock.js";
 
 /**
@@ -78,6 +78,8 @@ export function buildMoment(world, agent, intent, ranked) {
       return dialogueMoment(world, agent, intent, tick);
     case "conflict":
       return confrontMoment(world, agent, intent, tick);
+    case "call_in":
+      return callInMoment(world, agent, intent, tick);
     default:
       return reflectionMoment(world, agent, intent, tick, ranked);
   }
@@ -117,6 +119,7 @@ function contextFor(world, agent, targetId) {
     night: isNight(world.clock),
     goal: agent.goal.text,
     goalProgress: agent.goal.progress,
+    standingWord: standingWord(agent.standing ?? 0),
     memories: memories.map(m => m.text)
   };
 
@@ -129,6 +132,7 @@ function contextFor(world, agent, targetId) {
     ctx.relationWord = describeRelation(edgeToward(agent, target.id));
     ctx.relationPhrase = relationPhrase(edgeToward(agent, target.id));
     ctx.targetMood = moodWord(target, world.clock.tick);
+    ctx.targetStandingWord = standingWord(target.standing ?? 0);
   }
   return ctx;
 }
@@ -196,6 +200,7 @@ function confrontMoment(world, agent, intent, tick) {
   ctx.grievance = grievanceOf(agent, target, world);
 
   const escalate = edge.resentment >= 55 && agent.drives.courage >= 55;
+  const stage = feudStage(edge, edgeToward(target, agent.id), world.config);
 
   const options = [
     {
@@ -204,6 +209,7 @@ function confrontMoment(world, agent, intent, tick) {
       tone: "bold",
       ops: [
         { op: "edge", from: target.id, to: agent.id, deltas: { trust: -18, affinity: -12, resentment: 14 } },
+        { op: "standing", agent: agent.id, delta: world.config.standing.deedConfrontPublic },
         { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -30, familiarity: 4 } },
         { op: "need", agent: agent.id, deltas: { esteem: 12, connection: 6, energy: -6 } },
         { op: "need", agent: target.id, deltas: { esteem: -12 } },
@@ -309,7 +315,50 @@ function confrontMoment(world, agent, intent, tick) {
         },
         { op: "xp", agent: agent.id, amount: 8 }
       ]
-    }
+    },
+    // Only a vendetta earns this option: ending it, whatever it costs. It
+    // settles the ledger of hurt in one direction or the other, and the room
+    // will remember that it happened.
+    ...(stage === "vendetta"
+      ? [
+          {
+            id: "end_it",
+            label: `End it with ${target.name}, whatever it costs`,
+            tone: "dark",
+            ops: [
+              { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -70, affinity: -15, fear: -10 } },
+              { op: "edge", from: target.id, to: agent.id, deltas: { resentment: -40, trust: -15, fear: 15 } },
+              { op: "standing", agent: agent.id, delta: world.config.standing.deedConfrontPublic },
+              { op: "need", agent: agent.id, deltas: { esteem: 14, meaning: -8, energy: -10 } },
+              { op: "need", agent: target.id, deltas: { esteem: -16, connection: -8 } },
+              {
+                op: "memory",
+                agent: agent.id,
+                trace: {
+                  kind: "conflict",
+                  text: `It is finished between me and ${target.name}. Whatever it cost, it is paid.`,
+                  subjectId: target.id,
+                  valence: -0.2,
+                  salience: 0.95
+                }
+              },
+              {
+                op: "memory",
+                agent: target.id,
+                trace: {
+                  kind: "conflict",
+                  text: `${agent.name} ended it. I will be feeling that for a long time.`,
+                  subjectId: agent.id,
+                  valence: -0.7,
+                  salience: 0.9
+                }
+              },
+              { op: "xp", agent: agent.id, amount: 30 }
+            ],
+            escalates: true
+          }
+        ]
+      : [])
 /**
  * @param {import("../model/world.js").World} world
  */
@@ -449,6 +498,7 @@ function betrayMoment(world, agent, intent, tick) {
       tone: "ruthless",
       ops: [
         { op: "secret_publish", secretId: secret.id, by: agent.id },
+        { op: "standing", agent: agent.id, delta: world.config.standing.deedBetray },
         { op: "edge", from: subject.id, to: agent.id, deltas: { trust: -60, affinity: -45, resentment: 65, fear: 10 } },
         { op: "need", agent: subject.id, deltas: { esteem: -26, connection: -14, meaning: -10 } },
         { op: "need", agent: agent.id, deltas: { esteem: 10, meaning: 12, connection: -8 } },
@@ -762,6 +812,149 @@ function reflectionMoment(world, agent, intent, tick, ranked) {
 
   const question = `What is ${agent.name} thinking about, and what do they decide to do with the day?`;
   return makeMoment(world, "reflection", agent, ctx, question, options, 0.35, "reflection");
+}
+
+/**
+ * Build the moment where an owed favour comes due.
+ *
+ * The creditor (agent) is owed by the debtor (target). Three ways to play it:
+ * ask plainly and settle it, hold it over them as leverage, or tear the debt
+ * up as an act of grace. The payoffs deliberately avoid minting instant
+ * friendship — trust and relief move, not affection at alliance scale.
+ * @param {import("../model/world.js").World} world
+ * @param {import("../model/agent.js").Agent} agent
+ * @param {Intent} intent
+ * @param {number} tick
+ * @returns {Moment|null}
+ */
+function callInMoment(world, agent, intent, tick) {
+  const debtor = intent.targetId ? agentById(world, intent.targetId) : null;
+  if (!debtor) return null;
+  const edge = edgeToward(agent, debtor.id);
+  if (edge.debts <= 0) return null;
+
+  const ctx = contextFor(world, agent, debtor.id);
+  ctx.debt = Math.round(edge.debts);
+
+  const options = [
+    {
+      id: "ask_plainly",
+      label: `Ask ${debtor.name} to repay the favour, plainly`,
+      tone: "measured",
+      ops: [
+        { op: "call_in", from: agent.id, to: debtor.id },
+        { op: "edge", from: agent.id, to: debtor.id, deltas: { trust: 6, familiarity: 4 } },
+        { op: "edge", from: debtor.id, to: agent.id, deltas: { trust: 6, familiarity: 4, resentment: -6 } },
+        { op: "need", agent: agent.id, deltas: { esteem: 5, connection: 6 } },
+        { op: "need", agent: debtor.id, deltas: { connection: 6, esteem: 3 } },
+        {
+          op: "memory",
+          agent: agent.id,
+          trace: {
+            kind: "act",
+            text: `I asked ${debtor.name} to repay what they owed me, and they did. Clean.`,
+            subjectId: debtor.id,
+            valence: 0.4,
+            salience: 0.6
+          }
+        },
+        {
+          op: "memory",
+          agent: debtor.id,
+          trace: {
+            kind: "act",
+            text: `${agent.name} called in the favour I owed them. It is settled now, and I feel lighter for it.`,
+            subjectId: agent.id,
+            valence: 0.3,
+            salience: 0.6
+          }
+        },
+        { op: "xp", agent: agent.id, amount: 16 }
+      ]
+    },
+    {
+      id: "hold_it_over",
+      label: "Hold it over them instead of collecting",
+      tone: "calculated",
+      ops: [
+        // Deliberately no call_in op: the debt stays on the books. Leverage,
+        // not settlement — and it costs trust rather than building it.
+        { op: "standing", agent: agent.id, delta: world.config.standing.deedHoldOver },
+        { op: "edge", from: agent.id, to: debtor.id, deltas: { trust: -6, familiarity: 3 } },
+        { op: "edge", from: debtor.id, to: agent.id, deltas: { trust: -4, fear: 10, resentment: 8 } },
+        { op: "need", agent: agent.id, deltas: { esteem: 6, meaning: -4 } },
+        { op: "need", agent: debtor.id, deltas: { esteem: -6, connection: -4 } },
+        {
+          op: "memory",
+          agent: agent.id,
+          trace: {
+            kind: "act",
+            text: `I reminded ${debtor.name} what they owe me, without asking for it back. Let them sit with that.`,
+            subjectId: debtor.id,
+            valence: -0.1,
+            salience: 0.65
+          }
+        },
+        {
+          op: "memory",
+          agent: debtor.id,
+          trace: {
+            kind: "act",
+            text: `${agent.name} made sure I remembered I owe them. It was not a request.`,
+            subjectId: agent.id,
+            valence: -0.5,
+            salience: 0.7
+          }
+        },
+        { op: "xp", agent: agent.id, amount: 14 }
+      ]
+    },
+    {
+      id: "tear_it_up",
+      label: "Tear the debt up — call it even",
+      tone: "graceful",
+      ops: [
+        { op: "call_in", from: agent.id, to: debtor.id },
+        { op: "standing", agent: agent.id, delta: world.config.standing.deedForgive },
+        // Grace pays off in trust and relief, not in instant alliance. The
+        // affinity bumps stay well below the alliance threshold on their own.
+        { op: "edge", from: agent.id, to: debtor.id, deltas: { affinity: 8, trust: 8, familiarity: 5 } },
+        { op: "edge", from: debtor.id, to: agent.id, deltas: { affinity: 10, trust: 10, resentment: -12, fear: -8 } },
+        { op: "need", agent: agent.id, deltas: { meaning: 8, esteem: 4, connection: 6 } },
+        { op: "need", agent: debtor.id, deltas: { connection: 10, esteem: 6 } },
+        { op: "mood", agent: agent.id, value: "steady", durationTicks: 24, reason: "forgave a debt" },
+        {
+          op: "memory",
+          agent: agent.id,
+          trace: {
+            kind: "act",
+            text: `I told ${debtor.name} to forget what they owed me. Some debts are better torn up.`,
+            subjectId: debtor.id,
+            valence: 0.6,
+            salience: 0.75
+          }
+        },
+        {
+          op: "memory",
+          agent: debtor.id,
+          trace: {
+            kind: "act",
+            text: `${agent.name} forgave what I owed them outright. I will not forget that.`,
+            subjectId: agent.id,
+            valence: 0.7,
+            salience: 0.8
+          }
+        },
+        { op: "xp", agent: agent.id, amount: 18 }
+      ]
+    }
+  ];
+
+  const question =
+    `${debtor.name} owes ${agent.name} a favour, and the debt has been sitting there. ` +
+    `What does ${agent.name} do about it?`;
+
+  return makeMoment(world, "call_in", agent, ctx, question, options, 0.65, "call_in");
 }
 
 /* ------------------------------------------------------------------ *

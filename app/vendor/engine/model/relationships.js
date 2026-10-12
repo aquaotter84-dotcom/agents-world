@@ -31,6 +31,8 @@ import { RELATION_WORDS } from "../content.js";
  * @property {number} secretsShared  Secrets of mine I have let them hold.
  * @property {number} debts         Positive: they owe me. Negative: I owe them.
  * @property {number} [lastConflictTick] When this pair last had it out, so they don't live the same argument forever.
+ * @property {number} [lastFavourTick] When a favour was last done between this pair, for the creation cooldown and call-in grace period.
+ * @property {number} [lastCallInTick] When a debt was last called in between this pair, for the call-in cooldown.
  */
 
 /** A mind's default posture toward a stranger. */
@@ -114,7 +116,10 @@ export function decayRelations(agent, tick, config) {
     edge.affinity = toward(edge.affinity, 0, cfg.affinityDecayPerTick);
     edge.familiarity = toward(edge.familiarity, 0, cfg.familiarityDecayPerTick);
     edge.resentment = toward(edge.resentment, 0, cfg.resentmentDecayPerTick);
-    edge.fear = toward(edge.fear, 0, cfg.fearDecayPerTick);
+    // Debts fade too, in both directions — old obligations quietly stop
+    // mattering. This is what keeps the ledger from filling up with ancient
+    // favours nobody will ever call in.
+    edge.debts = toward(edge.debts, 0, config.favours.debtDecayPerTick);
 /**
  * @param {number} value
  */
@@ -298,8 +303,10 @@ export function relationsSummary(agent, byId, limit = 6) {
     const bits = [describeRelation(edge)];
     if (edge.resentment >= 30) bits.push("still sore about something");
     if (edge.fear >= 30) bits.push("wary of");
-    if (edge.debts > 20) bits.push("owes them a favour");
-    if (edge.debts < -20) bits.push("is owed a favour by them");
+    // debts > 0 means they owe me; debts < 0 means I owe them. The phrases
+    // read from this mind's side of the edge, so they must not be swapped.
+    if (edge.debts > 20) bits.push("is owed a favour by them");
+    if (edge.debts < -20) bits.push("owes them a favour");
     if (edge.trust < 20) bits.push("doesn't trust");
     return `${other?.name}: ${bits.join(", ")}`;
   });
@@ -312,4 +319,25 @@ export function relationsSummary(agent, byId, limit = 6) {
  */
 function importance(edge) {
   return Math.abs(edge.affinity) + edge.resentment * 1.2 + edge.fear + edge.familiarity * 0.4 + Math.abs(edge.debts) * 0.5;
+}
+
+/** Feud stages, coldest first. */
+export const FEUD_STAGES = ["grudge", "rivalry", "vendetta"];
+
+/**
+ * The feud stage between two minds, from the hotter side of the pair.
+ * Resentment is directional, but a feud is something a pair *has* — it takes
+ * the maximum, because one mind's vendetta is enough for both of them.
+ * @param {import("./relationships.js").RelationEdge|undefined} edgeA
+ * @param {import("./relationships.js").RelationEdge|undefined} edgeB
+ * @param {import("../config.js").WorldConfig} config
+ * @returns {"grudge"|"rivalry"|"vendetta"|null}
+ */
+export function feudStage(edgeA, edgeB, config) {
+  const heat = Math.max(edgeA?.resentment ?? 0, edgeB?.resentment ?? 0);
+  const v = config.vendetta;
+  if (heat >= v.vendettaAt) return "vendetta";
+  if (heat >= v.rivalryAt) return "rivalry";
+  if (heat >= v.grudgeAt) return "grudge";
+  return null;
 }

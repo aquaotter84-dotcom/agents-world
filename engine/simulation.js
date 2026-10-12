@@ -25,6 +25,9 @@ import { resolveIntent, chooseDefaultOption } from "./systems/act.js";
 import { applyEffects } from "./systems/effects.js";
 import { settleNeeds, checkCollapse } from "./systems/needs.js";
 import { settleRelations, settleProximity, hatchSecrets } from "./systems/social.js";
+import { settleTurnover } from "./systems/turnover.js";
+import { settleRituals } from "./systems/rituals.js";
+import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
 import { logEvent } from "./model/events.js";
 import { phrase, momentLine } from "./decision/prose.js";
@@ -127,6 +130,9 @@ export function step(world) {
   /* ---- 6. Proximity, deeds, expiry ---- */
   settleProximity(world);
   hatchSecrets(world);
+  settleTurnover(world);
+  settleRituals(world);
+  trackFeuds(world);
   // Systems queue ops rather than applying them mid-pass, so that nothing here
   // can mutate an agent halfway through another system's read of it.
   if (world.pendingOps && world.pendingOps.length) {
@@ -335,6 +341,8 @@ function eventKindFor(kind) {
       return "confide";
     case "dialogue":
       return "contact";
+    case "call_in":
+      return "favour";
     default:
       return "act";
   }

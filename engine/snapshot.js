@@ -32,6 +32,13 @@ const PERSISTED = [
   "chronicleMark",
   "seq",
   "flags",
+  // Slow-interval markers. These decide *when* a system next fires, and they
+  // draw from the seeded RNG when they do — so they are part of the world's
+  // state. A resumed world that forgot them would fire everything at once and
+  // fork the RNG stream.
+  "lastArrivalTick",
+  "lastDepartureTick",
+  "lastRitualKey",
   // Which narration lines have been used lately. Part of the world's state
   // rather than the module's, so a resumed or forked world does not immediately
   // start repeating lines the original had already spent.

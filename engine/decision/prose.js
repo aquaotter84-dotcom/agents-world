@@ -160,6 +160,11 @@ const MOMENT_LINES = {
     "{name} kept {other} waiting for an answer that was never coming.",
     "{name} left it unsaid in front of {other}, and it will be heavier next time."
   ],
+  "confrontation:end_it": [
+    "{name} ended it with {other}, whatever it cost, and both of them know it is over.",
+    "It is finished between {name} and {other}. The room watched it happen.",
+    "{name} paid whatever the vendetta with {other} was asking, and walked away from the wreckage."
+  ],
   "confession:tell_them_everything": [
     "{name} told {other} all of it, and sat there afterwards with nothing left to carry.",
     "{name} said the whole thing out loud, to {other}, for the first time.",
@@ -201,6 +206,21 @@ const MOMENT_LINES = {
     "{name} held what they had and watched {other} go about their day.",
     "{name} had the thing in their hand all day and never opened it.",
     "{name} decided against {other}, and told nobody, including themselves."
+  ],
+  "call_in:ask_plainly": [
+    "{name} asked {other} to repay the favour, plainly, and {other} did.",
+    "{name} called it in without ceremony, and the ledger between them and {other} is clean.",
+    "{name} said it was time, and {other} made it right."
+  ],
+  "call_in:hold_it_over": [
+    "{name} reminded {other} what was owed, and left it at that — for now.",
+    "{name} let {other} know the debt was not forgotten, and watched it land.",
+    "{name} held the favour over {other} like a held breath."
+  ],
+  "call_in:tear_it_up": [
+    "{name} told {other} to forget the whole thing. It is torn up.",
+    "{name} forgave what {other} owed, outright, and meant it.",
+    "{name} decided some debts are better destroyed than collected, and destroyed the one {other} owed."
   ],
   "dialogue:genuine_moment": [
     "{name} and {other} got somewhere real, and both noticed it happening.",
@@ -490,6 +510,26 @@ const TEMPLATES = {
     "{name} kept {other} company through the whole {phase} without being asked.",
     "{name} and {other} made a plan together, and meant it.",
     "{name} laughed at {other}'s joke before {other} had finished it."
+  ],
+  favour_given: [
+    "{name} did {other} a real favour in {region}, and both of them know it counts.",
+    "{name} went out of their way for {other}, and asked for nothing back — yet.",
+    "{other} needed something, and {name} was the one who showed up."
+  ],
+  arrival: [
+    "{name} walked into {region} like they had been expected, though nobody had.",
+    "A stranger came to {region} at {phase}: {name}, with a past nobody has heard yet.",
+    "{name} arrived with dust on their boots and a name the world will have to learn."
+  ],
+  departure: [
+    "{name} left {region} without ceremony, and the world is one mind smaller.",
+    "{name} walked out in the {phase} and did not say where they were going.",
+    "Nobody saw {name} go. {region} noticed the absence before the leaving."
+  ],
+  death: [
+    "{name} died in {region}, and the world rearranged itself around the hole.",
+    "The {phase} took {name} in {region}. They will be spoken of for a while.",
+    "{name} is gone. {region} keeps the shape of where they stood."
   ],
   level: [
     "{name} has become someone it would be unwise to underestimate.",

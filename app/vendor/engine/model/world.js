@@ -33,6 +33,8 @@ import { neutralEdge } from "./relationships.js";
  * @property {number} lastSpreadTick
  * @property {number} weaponisedTick   When someone used it against the subject.
  * @property {string|null} originatorId
+ * @property {number} [timesTold]     How many times it has been passed on.
+ * @property {number} [mutations]     How many of those tellings warped it.
  */
 
 /**
@@ -56,6 +58,8 @@ import { neutralEdge } from "./relationships.js";
  * @property {string} [targetPersonality]
  * @property {string} [targetRegion]
  * @property {boolean} [together]
+ * @property {string} [standingWord]        What the room thinks of this mind.
+ * @property {string} [targetStandingWord]  What the room thinks of the other mind.
  * @property {string} [relationWord]
  * @property {string} [relationPhrase]
  * @property {string} [targetMood]
@@ -114,6 +118,9 @@ import { neutralEdge } from "./relationships.js";
  * @property {Record<string, any>} [flags] Diagnostics, e.g. the last failed effect.
  * @property {object[]} [pendingOps] Ops queued by a system and applied at the end of the tick.
  * @property {Record<string, string[]>} [proseMemory] Recently used narration, per pool — what stops the feed repeating itself.
+ * @property {number} [lastArrivalTick]  Tick a wanderer last arrived.
+ * @property {number} [lastDepartureTick] Tick a mind last left or died.
+ * @property {string} [lastRitualKey]  "ritualId:day" of the last applied ritual.
  * @property {(kind: string) => string} nextId
  */
 
@@ -221,7 +228,8 @@ export function createWorld(opts = {}) {
         icon: spec.icon,
         regionId: spec.regionId,
         goalText: spec.goalText,
-        goalKind: spec.goalKind
+        goalKind: spec.goalKind,
+        seedCast: true
       },
       rng,
       world.clock.tick,
@@ -376,6 +384,10 @@ function seedInitialBonds(world) {
     const warmth = rng.gauss(0, 22);
     const suspicion = Math.max(0, rng.gauss(0, 10));
 
+    // Debts are the one axis that must agree: if a's edge says b owes a, then
+    // b's edge must say a is owed. A debt that disagrees with itself is not
+    // asymmetry, it is a bookkeeping error.
+    const seedDebt = rng.chance(0.3) ? rng.int(-40, 40) : 0;
     a.relations[b.id] = {
       affinity: clamp100(warmth),
       trust: clamp100(45 + warmth * 0.5),
@@ -385,7 +397,7 @@ function seedInitialBonds(world) {
       lastContactTick: -1,
       contacts: rng.int(1, 8),
       secretsShared: 0,
-      debts: rng.chance(0.3) ? rng.int(-40, 40) : 0
+      debts: seedDebt
     };
     // The other side is correlated but not identical — asymmetry from day one.
     b.relations[a.id] = {
@@ -397,7 +409,10 @@ function seedInitialBonds(world) {
       lastContactTick: -1,
       contacts: rng.int(1, 8),
       secretsShared: 0,
-      debts: rng.chance(0.3) ? rng.int(-40, 40) : 0
+      // The old code drew an independent debt for this side too; those draws
+      // are consumed and discarded so the RNG stream stays exactly where it
+      // was — the only change is that the ledger now agrees with itself.
+      debts: rng.chance(0.3) ? (rng.int(-40, 40), -seedDebt) : -seedDebt
     };
 
     // And a memory of the history, so the relationship has a reason to exist.

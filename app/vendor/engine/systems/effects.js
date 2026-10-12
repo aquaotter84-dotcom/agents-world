@@ -109,6 +109,72 @@ function applyOne(world, op, tick, meta) {
       return null;
     }
 
+    case "favour": {
+      // A favour writes a symmetric debt: one op touches both sides of the
+      // ledger, because a debt that only exists on one side is a disagreement
+      // waiting to happen, not a fact about the world.
+      //
+      // Sign convention (see relationships.js): on an edge, debts > 0 means
+      // "they owe me". So the giver's edge toward the receiver gains the debt,
+      // and the receiver's edge toward the giver mirrors it negative — from
+      // their side, they are the one who owes.
+      const giver = agentById(world, op.from);
+      const receiver = agentById(world, op.to);
+      if (!giver || !receiver) return null;
+      const cfg = world.config.favours;
+      const giverEdge = edgeToward(giver, receiver.id);
+      if (tick - (giverEdge.lastFavourTick ?? -9999) < cfg.createCooldownTicks) return null;
+      const amount = clamp(op.amount ?? cfg.amount, 1, 100);
+      adjustEdge(giver, receiver.id, { debts: amount, familiarity: 3, trust: 2, affinity: 4 }, tick);
+      adjustEdge(receiver, giver.id, { debts: -amount, familiarity: 3, trust: 3 }, tick);
+      edgeToward(giver, receiver.id).lastFavourTick = tick;
+      edgeToward(receiver, giver.id).lastFavourTick = tick;
+      remember(giver.memory, {
+        tick,
+        kind: "act",
+        text: `I did ${receiver.name} a real favour. They owe me one now.`,
+        subjectId: receiver.id,
+        valence: 0.45,
+        salience: 0.6
+      }, world.nextId);
+      remember(receiver.memory, {
+        tick,
+        kind: "act",
+        text: `${giver.name} did me a real favour. I owe them one.`,
+        subjectId: giver.id,
+        valence: 0.35,
+        salience: 0.6
+      }, world.nextId);
+      return null;
+    }
+
+    case "call_in": {
+      // Calling in a debt shrinks both sides of the ledger toward zero by the
+      // same amount. Never let either side cross zero — a call-in settles what
+      // is owed, it does not flip who owes whom.
+      const creditor = agentById(world, op.from);
+      const debtor = agentById(world, op.to);
+      if (!creditor || !debtor) return null;
+      const owed = edgeToward(creditor, debtor.id).debts;
+      if (owed <= 0) return null;
+      const amount = Math.min(owed, clamp(op.amount ?? owed, 0, 100));
+      if (amount <= 0) return null;
+      adjustEdge(creditor, debtor.id, { debts: -amount }, tick);
+      adjustEdge(debtor, creditor.id, { debts: amount }, tick);
+      edgeToward(creditor, debtor.id).lastCallInTick = tick;
+      edgeToward(debtor, creditor.id).lastCallInTick = tick;
+      return null;
+    }
+
+    case "standing": {
+      // Public reputation. Clamped hard: no single deed makes a legend, and no
+      // single rumour makes a pariah — those take repetition.
+      const agent = agentById(world, op.agent);
+      if (!agent) return null;
+      agent.standing = clamp((agent.standing ?? 0) + (op.delta ?? 0), -100, 100);
+      return null;
+    }
+
     case "need": {
       const agent = agentById(world, op.agent);
       if (!agent) return null;
@@ -284,6 +350,8 @@ function applyOne(world, op, tick, meta) {
         // Growth is its own reward, and it does something for how a mind holds
         // itself.
         agent.needs.esteem = clamp(agent.needs.esteem + 9, 0, 100);
+        // The room notices a mind becoming someone. Reputation follows deeds.
+        agent.standing = clamp((agent.standing ?? 0) + world.config.standing.deedLevel, -100, 100);
         return logEvent(world, {
           kind: "level",
           agentId: agent.id,

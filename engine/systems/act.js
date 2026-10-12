@@ -18,6 +18,7 @@ import { temperamentOverlap } from "../model/agent.js";
 import { recall } from "../model/memory.js";
 import { composeScene } from "./scene.js";
 import { phrase } from "../decision/prose.js";
+import { tellWithMutation } from "./rumour.js";
 import { isNight } from "../clock.js";
 import { generateIntents } from "../decision/intents.js";
 
@@ -56,6 +57,7 @@ export function resolveIntent(world, agent, intent, ranked) {
     explore: resolveExplore,
     withdraw: resolveWithdraw,
     forge_bond: resolveForgeBond,
+    grant_favour: resolveGrantFavour,
     observe: resolveObserve
   };
   const handler = handlers[intent.kind];
@@ -319,6 +321,13 @@ function shareOpinion(world, agent, target, intent) {
   const ops = [
     { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 4, familiarity: 8, trust: 1 } },
     { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: telling === "unkind" ? -1 : 2 } },
+    // The room hears the story before it checks the facts: gossip moves public
+    // standing faster than the deeds that earn it.
+    ...(telling === "unkind"
+      ? [{ op: "standing", agent: about.id, delta: -world.config.standing.gossipPull }]
+      : telling === "warm"
+        ? [{ op: "standing", agent: about.id, delta: world.config.standing.gossipPull }]
+        : []),
     { op: "need", agent: agent.id, deltas: { connection: 10, esteem: 3, energy: -3 } },
     {
       op: "memory",
@@ -395,10 +404,14 @@ function shareSecret(world, agent, target, secret, cfg) {
   // How the telling is framed depends on how much of it survived the journey:
   // firsthand, worn smooth, or down to a rumour with two sides.
   const pool = fidelity >= 0.75 ? "spread_loud" : fidelity >= 0.4 ? "spread_soft" : "spread_garbled";
+  // And the words themselves may warp: details sharpen or soften, and
+  // sometimes the name at the centre changes. The secret underneath stays
+  // what it was — what the room says becomes its own creature.
+  const telling = tellWithMutation(world, secret, secretClaimFor(secret));
   const asTold = phrase(world, agent, pool, {
     other: target.name,
     region: regionName(world, agent.regionId),
-    claim: secretClaimFor(secret)
+    claim: telling.claim
   });
 
   /** @type {EffectOp[]} */
@@ -424,7 +437,22 @@ function shareSecret(world, agent, target, secret, cfg) {
  * @param {import("../model/world.js").World} world
  */
     },
-    { op: "xp", agent: agent.id, amount: 9 }
+    { op: "xp", agent: agent.id, amount: 9 },
+    // A mind that warps a story usually knows it did.
+    ...(telling.mutated
+      ? [{
+          op: "memory",
+          agent: agent.id,
+          trace: {
+            kind: "gossip",
+            text: `I told it ${telling.kind === "misattributed" ? "with the wrong name in the middle" : telling.kind === "exaggerated" ? "worse than I heard it" : "softer than I heard it"}. It will travel from here on its own.`,
+            subjectId: secret.aboutId,
+            valence: -0.15,
+            salience: 0.55,
+            secretId: secret.id
+          }
+        }]
+      : [])
   ];
 
   return {
@@ -622,6 +650,57 @@ function resolveForgeBond(world, agent, intent) {
   const res = socialEncounter(world, agent, target, "bond");
   res.ops.push({ op: "need", agent: agent.id, deltas: { meaning: 4, esteem: 3 } });
   return res;
+}
+
+/**
+ * Do someone a real favour: cost to the giver, debt on the ledger, warmth
+ * between them. The debt is the point — it becomes material for later drama —
+ * so the favour is never free, and never forgotten by either side.
+ * @param {World} world
+ * @param {Agent} agent
+ * @param {Intent} intent
+ * @returns {Resolution}
+ */
+function resolveGrantFavour(world, agent, intent) {
+  const target = intent.targetId ? agentById(world, intent.targetId) : null;
+  if (!target || target.retired) return resolveObserve(world, agent, intent);
+  if (target.regionId !== agent.regionId) return travelToward(world, agent, target.regionId, target.name);
+  const fcfg = world.config.favours;
+  const edge = edgeToward(agent, target.id);
+  if (world.clock.tick - (edge.lastFavourTick ?? -9999) < fcfg.createCooldownTicks) {
+    // Lost the race: the pair already traded a favour this window. Fall back
+    // to a kind hour together rather than narrating a favour that never
+    // touched the ledger.
+    return {
+      ops: [
+        { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 3, familiarity: 4 } },
+        { op: "need", agent: agent.id, deltas: { connection: 8, energy: -2 } },
+        { op: "xp", agent: agent.id, amount: 6 }
+      ],
+      text: phrase(world, agent, "contact_warm", {
+        region: regionName(world, agent.regionId),
+        other: target.name
+      }),
+      eventKind: "contact",
+      significance: 0.2,
+      quiet: true
+    };
+  }
+  return {
+    ops: [
+      { op: "favour", from: agent.id, to: target.id, amount: fcfg.amount },
+      { op: "need", agent: agent.id, deltas: { energy: -8, esteem: 6, meaning: 6 } },
+      { op: "need", agent: target.id, deltas: { connection: 8 } },
+      { op: "xp", agent: agent.id, amount: 12 }
+    ],
+    text: phrase(world, agent, "favour_given", {
+      region: regionName(world, agent.regionId),
+      other: target.name
+    }),
+    eventKind: "favour",
+    significance: 0.3,
+    quiet: false
+  };
 }
 
 /* ------------------------------------------------------------------ *

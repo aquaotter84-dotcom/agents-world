@@ -39,6 +39,7 @@ export {
   moodWord,
   pressingNeed,
   stateLine,
+  standingWord,
   temperamentOverlap,
   needGain,
   classOf,
@@ -53,7 +54,9 @@ export {
   fearedOf,
   factions,
   edgeToward,
-  neutralEdge
+  neutralEdge,
+  feudStage,
+  FEUD_STAGES
 } from "./model/relationships.js";
 export { recentEvents, publicEvents, eventsInvolving } from "./model/events.js";
 export { regionPath, regionDistance, nextStepToward } from "./model/regions.js";
@@ -68,10 +71,15 @@ export { phrase, momentLine } from "./decision/prose.js";
 export { applyEffects } from "./systems/effects.js";
 export { resolveIntent, socialEncounter, chooseDefaultOption } from "./systems/act.js";
 export { socialTemperature, currentFactions } from "./systems/social.js";
+export { settleTurnover, arrive, depart, isProtected } from "./systems/turnover.js";
+export { mutateClaim, tellWithMutation } from "./systems/rumour.js";
+export { activeRitual, settleRituals } from "./systems/rituals.js";
+export { trackFeuds } from "./systems/vendetta.js";
+export { KEEPER_ROLES, roleById } from "./chat.js";
 export { preoccupations, memoryLoad } from "./systems/memory.js";
 
 /* ---- configuration and content ---- */
 export { DEFAULT_CONFIG, makeConfig, clamp } from "./config.js";
-export { SECRET_TEMPLATES, REGIONS, BACKSTORIES, GOAL_IDEAS } from "./content.js";
+export { SECRET_TEMPLATES, REGIONS, BACKSTORIES, GOAL_IDEAS, WANDERERS } from "./content.js";
 export { createRng, weightedPick } from "./rng.js";
 export { describeClock, isNight, phaseOf } from "./clock.js";

@@ -97,3 +97,35 @@ export const GOSSIP_FRAMES = {
   distorted: ["They're saying {claim}, though nobody agrees on the details", "Half the world swears that {claim}"],
   garbled: ["Someone insists that {claim}, and someone else insists it's the opposite", "You hear strange versions of it — that {claim}, or maybe that nothing happened at all"]
 };
+
+/**
+ * Minds who might wander into the world. Each has a complete identity so an
+ * arrival reads as a person, not a spawn event. Names must not collide with
+ * the seed cast.
+ */
+export const WANDERERS = [
+  { name: "Ash", epithet: "the Grey", class: "Warden", archetype: "The Stoic", color: "#9ca3af", icon: "◍",
+    personality: "Quiet keeper of old roads", goalText: "Find a road worth keeping." },
+  { name: "Brindle", epithet: "", class: "Maker", archetype: "The Bold", color: "#f59e0b", icon: "⬡",
+    personality: "Loud inventor; breaks things to learn them", goalText: "Build something that outlasts its maker." },
+  { name: "Corva", epithet: "", class: "Scholar", archetype: "The Curious", color: "#60a5fa", icon: "✧",
+    personality: "Collector of other people's stories", goalText: "Collect a hundred true stories." },
+  { name: "Dun", epithet: "the Patient", class: "Warden", archetype: "The Dreamer", color: "#a3a380", icon: "◎",
+    personality: "Slow-moving; notices what hurriers miss", goalText: "Learn the name of every wind." },
+  { name: "Edda", epithet: "", class: "Diplomat", archetype: "The Curious", color: "#f9a8d4", icon: "❋",
+    personality: "Charming; remembers everyone's debts but her own", goalText: "Be owed a favour by everyone." },
+  { name: "Flint", epithet: "", class: "Maker", archetype: "The Stoic", color: "#78716c", icon: "⬢",
+    personality: "Grim smith; trusts metal more than minds", goalText: "Forge one perfect thing." },
+  { name: "Hazel", epithet: "Quickfoot", class: "Warden", archetype: "The Bold", color: "#4ade80", icon: "➤",
+    personality: "Restless runner; cannot sit through a meeting", goalText: "Outrun a rumour about herself." },
+  { name: "Ivo", epithet: "the Mild", class: "Scholar", archetype: "The Dreamer", color: "#93c5fd", icon: "☾",
+    personality: "Gentle astronomer of small hours", goalText: "Name a star no one else has seen." },
+  { name: "Lark", epithet: "", class: "Diplomat", archetype: "The Bold", color: "#fda4af", icon: "♪",
+    personality: "Singer; says with songs what she won't say straight", goalText: "Write the song the world hums." },
+  { name: "Moss", epithet: "Underfoot", class: "Scholar", archetype: "The Stoic", color: "#65a30d", icon: "❀",
+    personality: "Herbalist; listens to growing things", goalText: "Grow something that shouldn't grow here." },
+  { name: "Nyx", epithet: "", class: "Diplomat", archetype: "The Dreamer", color: "#818cf8", icon: "◐",
+    personality: "Night-thinker; most honest after midnight", goalText: "Understand what the dark is for." },
+  { name: "Quill", epithet: "the Sharp", class: "Maker", archetype: "The Curious", color: "#fbbf24", icon: "✒",
+    personality: "Sarcastic cartographer of grudges", goalText: "Map every grudge in the world." }
+];

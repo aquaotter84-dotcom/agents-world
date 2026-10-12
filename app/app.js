@@ -23,7 +23,8 @@ import {
   agentById, livingAgents, regionName, regionOccupancy,
   moodWord, stateLine, describeClock, phaseOf,
   REGIONS, GOAL_IDEAS, BACKSTORIES,
-  describeRelation,
+  describeRelation, standingWord,
+  KEEPER_ROLES, roleById,
   socialTemperature, currentFactions,
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
   levelProgress, pressingNeed
@@ -81,6 +82,7 @@ const ICONS = ["✦", "✧", "❖", "◉", "◎", "⛨", "⛉", "⚒", "☾", "�
 let world = null;
 let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45 };
 let chats = {};
+let chatRoles = {};
 let ui = { selectedId: null, chatId: null, record: "feed" };
 let lastSeenAt = Date.now();
 let keeper = emptyKeeper();
@@ -126,7 +128,7 @@ function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       world: serializeWorld(world),
-      settings, chats, ui, keeper, lastSeenAt: Date.now()
+      settings, chats, chatRoles, ui, keeper, lastSeenAt: Date.now()
     }));
   } catch (e) { /* storage full/blocked */ }
 }
@@ -141,6 +143,7 @@ function load() {
       world = deserializeWorld(s.world);
       settings = Object.assign(settings, s.settings);
       chats = s.chats || {};
+      chatRoles = s.chatRoles || {};
       ui = Object.assign(ui, s.ui);
       keeper = normalizeKeeper(s.keeper);
       lastSeenAt = s.lastSeenAt || Date.now();
@@ -439,9 +442,11 @@ async function fetchThought(a) {
   return clean;
 }
 
-async function mindReplies(a, history) {
+async function mindReplies(a, history, roleId) {
+  const role = roleById(roleId);
   const sys = "You are " + agentName(a) + ", " + a.personality +
     " — one mind in a shared living world, chatting one-on-one with the world's keeper (Jeremy). " +
+    role.voice + " " +
     "Live state: " + stateLine(a, tickNow()) +
     ".\nWhere you are: " + regionName(world, a.regionId) + ". What you are working on: " + a.goal.text +
     ".\nStay in character, be vivid but concise (a few sentences max). Never mention you are AI.";
@@ -461,8 +466,12 @@ function armTick() {
 const KIND_TONE = {
   triumph: "gold", level: "gold", goal: "gold",
   betrayal: "blood", conflict: "blood", death: "blood",
+  feud: "blood",
   secret: "violet", confide: "violet",
   world: "ember", chronicle: "ember",
+  favour: "ember",
+  arrival: "gold", departure: "mist",
+  ritual: "violet",
   gossip: "mist", contact: "mist"
 };
 /* Stamp events "Day 3 · dusk" from the engine's own clock math. */
@@ -1242,7 +1251,8 @@ function openSheet(id) {
   $("sheet-head").innerHTML =
     '<span class="orb sheet-orb" style="border-color:' + esc(a.color) + ";box-shadow:0 0 22px " + esc(a.color) + '">' + portraitHtml(a) + "</span>" +
     "<span>" + esc(a.name) + (a.epithet ? " " + esc(a.epithet) : "") +
-    '<span class="sh-sub">' + esc(a.class) + " · " + esc(a.archetype) + " · Lv " + a.level + "</span></span>";
+    '<span class="sh-sub">' + esc(a.class) + " · " + esc(a.archetype) + " · Lv " + a.level +
+    " · " + esc(standingWord(a.standing ?? 0)) + "</span></span>";
   $("sheet-personality").textContent =
     a.personality + " · " + regionName(world, a.regionId) + (a.awake ? "" : " · asleep") +
     (a.backstory ? " · " + a.backstory : "");
@@ -1441,7 +1451,25 @@ function openChat(id) {
   $("chat-peer").innerHTML =
     '<span style="color:' + esc(a.color) + '">' + esc(a.icon) + "</span> " + esc(a.name) +
     ' <span class="note">· ' + esc(regionName(world, a.regionId)) + "</span>";
+  renderRolePicker(a);
   renderChatLog();
+}
+
+/* The keeper picks a role for each conversation; the role colours the mind's voice. */
+function renderRolePicker(a) {
+  const sel = $("chat-role");
+  sel.innerHTML = "";
+  for (const role of KEEPER_ROLES) {
+    const opt = document.createElement("option");
+    opt.value = role.id;
+    opt.textContent = role.name + " — " + role.blurb;
+    sel.appendChild(opt);
+  }
+  sel.value = roleById(chatRoles[a.id]).id;
+  sel.onchange = () => {
+    chatRoles[a.id] = sel.value;
+    save();
+  };
 }
 function renderChatLog() {
   const a = agentById(world, ui.chatId);
@@ -1478,7 +1506,7 @@ async function sendChat() {
   $("chat-log").appendChild(typing);
   $("chat-log").scrollTop = $("chat-log").scrollHeight;
   try {
-    const reply = await mindReplies(a, hist);
+    const reply = await mindReplies(a, hist, chatRoles[a.id]);
     hist.push({ role: "assistant", content: reply, ts: Date.now() });
     if (hist.length > 100) hist.splice(0, hist.length - 100);
   } catch (err) {

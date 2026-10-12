@@ -39,6 +39,9 @@ export function buildPrompt(world, moment) {
   lines.push(`Right now: ${ctx.region}, ${ctx.phase}. ${ctx.regionBlurb}`);
   lines.push(`Your condition: ${ctx.stateLine}`);
   lines.push(`What you are for: ${ctx.goal}`);
+  if (ctx.standingWord && ctx.standingWord !== "unknown") {
+    lines.push(`What the room thinks of you: ${ctx.standingWord}.`);
+  }
 
   if (ctx.targetName) {
     lines.push("");
@@ -46,6 +49,9 @@ export function buildPrompt(world, moment) {
     lines.push(`${ctx.targetName} is with you. ${ctx.targetName} is ${who}.`);
     lines.push(`You regard ${ctx.targetName} as ${ctx.relationPhrase}.`);
     if (ctx.targetMood) lines.push(`${ctx.targetName} seems ${ctx.targetMood}.`);
+    if (ctx.targetStandingWord && ctx.targetStandingWord !== "unknown") {
+      lines.push(`Around here, ${ctx.targetName} is ${ctx.targetStandingWord}.`);
+    }
   }
 
   if (ctx.grievance) {

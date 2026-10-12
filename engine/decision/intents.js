@@ -14,10 +14,11 @@
 
 import { clamp } from "../config.js";
 import { isNight } from "../clock.js";
-import { rivalsOf, edgeToward, fearedOf, adjustEdge } from "../model/relationships.js";
+import { rivalsOf, edgeToward, fearedOf, adjustEdge, feudStage } from "../model/relationships.js";
 import { regionDistance } from "../model/regions.js";
 import { recall } from "../model/memory.js";
 import { recallingSecretBurden, strongestBurden } from "./burden.js";
+import { activeRitual } from "../systems/rituals.js";
 
 /**
  * @typedef {object} Intent
@@ -51,6 +52,8 @@ export const WEIGHTS = {
   rivalryPush: 34,
   fearBrake: 26,
   debtPull: 12,
+  /** Generosity — the pull toward doing someone a favour. */
+  favourPull: 16,
 
   /** Situational. */
   nightRest: 14,
@@ -101,6 +104,10 @@ export function generateIntents(world, agent) {
    * story about one room.
    */
   const crowd = Math.max(0, here.length - 2);
+
+  // Calendar weather: when a ritual is active, minds lean with it. Nobody
+  // decides a Gathering Night; everybody feels it.
+  const ritualBias = activeRitual(world)?.intentBias || null;
 
   /** @type {Intent[]} */
   const out = [];
@@ -193,6 +200,10 @@ export function generateIntents(world, agent) {
         }
         // A withdrawn mind avoids crowds even when lonely.
         score -= WEIGHTS.fearBrake * (fearedOf(agent).length > 0 ? 0.4 : 0);
+        if (ritualBias === "seek_company") {
+          score += 10;
+          reasons.push("it is Gathering Night");
+        }
         add("seek_company", preferred.id, score, reasons, { requiresProximity: true });
       }
     } else if (connection.value < 50) {
@@ -317,6 +328,28 @@ export function generateIntents(world, agent) {
     }
   }
 
+  /* ---------- Call in a favour ---------- */
+  {
+    // Being owed is a slow pressure, not an emergency. The grace period after
+    // the favour was done and the cooldown after the last call-in keep this
+    // from becoming a standing demand; the debt's size decides how loud it is.
+    const fcfg = cfg.favours;
+    for (const [otherId, edge] of Object.entries(agent.relations)) {
+      const other = byId.get(otherId);
+      if (!other || other.retired) continue;
+      if (edge.debts < fcfg.callInThreshold) continue;
+      if (tick - (edge.lastFavourTick ?? -9999) < fcfg.graceTicks) continue;
+      if (tick - (edge.lastCallInTick ?? -9999) < fcfg.callInCooldownTicks) continue;
+      const reasons = [`${other.name} owes them a favour`];
+      let score = fcfg.debtUtilityPull * edge.debts;
+      score += WEIGHTS.needEsteem * esteem.deficit * 0.3;
+      score += WEIGHTS.driveCourage * (agent.drives.courage / 100) * 0.4;
+      score -= WEIGHTS.fearBrake * (edge.fear / 100);
+      if (edge.debts >= 40) reasons.push("it is a substantial debt");
+      add("call_in", otherId, score, reasons, { requiresProximity: true });
+    }
+  }
+
   /* ---------- Confront a rival ---------- */
   {
     const rivals = rivalsOf(agent, cfg);
@@ -338,7 +371,14 @@ export function generateIntents(world, agent) {
       if (edge.resentment >= 55) reasons.push(`still furious with ${rival.name}`);
       if (edge.fear > 40) reasons.push("frightened of them");
       if (esteem.value < 30) reasons.push("needs to be taken seriously again");
-      if (edge.resentment > 25) add("confront", rivalId, score, reasons, { requiresProximity: false });
+      // A vendetta wants settling even when the raw grievance number would not
+      // clear the bar on its own.
+      const stage = feudStage(edge, edgeToward(rival, agent.id), cfg);
+      if (stage === "vendetta") {
+        score += cfg.vendetta.confrontBonus;
+        reasons.push(`this is a vendetta with ${rival.name}`);
+      }
+      if (edge.resentment > 25 || stage === "vendetta") add("confront", rivalId, score, reasons, { requiresProximity: false });
     }
   }
 
@@ -373,6 +413,12 @@ export function generateIntents(world, agent) {
         score += WEIGHTS.driveCourage * (agent.drives.courage / 100) * 0.4;
         score -= WEIGHTS.fearBrake * (edge.fear / 100) * 0.8;
         score += 10 * (1 - secret.holders[agent.id]); // a garbled version is easier to spill
+        // A vendetta sharpens the appetite: using what you know stops being a
+        // choice and starts being the point.
+        if (feudStage(edge, edgeToward(subject, agent.id), cfg) === "vendetta") {
+          score *= cfg.vendetta.betrayalMultiplier;
+          reasons.push(`this is a vendetta with ${subject.name}`);
+        }
         if (edge.resentment >= 50) reasons.push(`wants ${subject.name} to hurt`);
         if (agent.drives.social < 40) reasons.push("has little to lose socially");
         if (reasons.length) add("betray", secret.aboutId, score, reasons, {
@@ -429,6 +475,32 @@ export function generateIntents(world, agent) {
     }
   }
 
+  /* ---------- Do someone a favour ---------- */
+  {
+    // Generosity is aimed, not sprayed: a mind does favours for people it
+    // already likes, when it has the energy to spare. The creation cooldown
+    // stops one generous mind from indebting the whole region in a day.
+    const fcfg = cfg.favours;
+    const candidates = here
+      .map(o => ({ other: o, edge: edgeToward(agent, o.id) }))
+      .filter(x => x.edge.affinity > 15)
+      .filter(x => x.edge.resentment < cfg.relations.rivalryThreshold)
+      .filter(x => tick - (x.edge.lastFavourTick ?? -9999) >= fcfg.createCooldownTicks)
+      .sort((a, b) => b.edge.affinity - a.edge.affinity);
+    if (candidates.length && agent.needs.energy > 40) {
+      const { other, edge } = candidates[0];
+      const reasons = [`likes ${other.name} enough to help`];
+      let score = WEIGHTS.favourPull * (edge.affinity / 100);
+      score += WEIGHTS.driveSocial * (agent.drives.social / 100) * 0.5;
+      score += WEIGHTS.needEsteem * esteem.deficit * 0.3;
+      if (agent.needs.energy > 70) {
+        score += 8;
+        reasons.push("has the energy to spare");
+      }
+      add("grant_favour", other.id, score, reasons, { requiresProximity: true });
+    }
+  }
+
   /* ---------- Withdraw ---------- */
   {
     const fears = fearedOf(agent);
@@ -441,11 +513,17 @@ export function generateIntents(world, agent) {
       reasons.push("wants to be somewhere nobody is looking");
     }
     if (fears.length) reasons.push("avoiding someone");
+    if (ritualBias === "withdraw") {
+      score += 10;
+      reasons.push("the world is keeping to itself today");
+    }
     if (reasons.length) add("withdraw", null, score, reasons, {});
   }
 
   /* ---------- Observe: always available, never exciting ---------- */
-  add("observe", null, WEIGHTS.observeBase + rng.gauss(0, 3), ["taking the world in"], {});
+  add("observe", null,
+    WEIGHTS.observeBase + rng.gauss(0, 3) + (ritualBias === "observe" ? 8 : 0),
+    ritualBias === "observe" ? ["taking the world in", "it is Quiet Day"] : ["taking the world in"], {});
 
   out.sort((a, b) => b.utility - a.utility);
   return out;
@@ -463,7 +541,9 @@ function pickCompanion(world, agent, here, byId) {
   if (!here.length) return null;
   return here
     .map(o => ({ o, edge: edgeToward(agent, o.id) }))
-    .sort((a, b) => companionScore(b.edge, cfg) - companionScore(a.edge, cfg))[0].o;
+    // The room's opinion counts: a well-regarded mind is slightly more magnetic
+    // to be around, a notorious one slightly less — independent of private liking.
+    .sort((a, b) => companionScore(b.edge, cfg) + (b.o.standing ?? 0) * 0.12 - (companionScore(a.edge, cfg) + (a.o.standing ?? 0) * 0.12))[0].o;
 }
 
 /**

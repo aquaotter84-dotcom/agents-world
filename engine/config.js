@@ -164,6 +164,149 @@ export const DEFAULT_CONFIG = {
     pairCooldownTicks: 12
   },
 
+  standing: {
+    /**
+     * Public reputation, -100..100, separate from private affection. Public
+     * deeds move it; gossip moves it faster than the deeds themselves, because
+     * the room always hears the story before it checks the facts.
+     */
+    deedBetray: -16,
+    deedConfrontPublic: -6,
+    deedHoldOver: -4,
+    deedForgive: 10,
+    deedLevel: 8,
+    /** Standing gained or lost when gossip paints someone warm or unkind. */
+    gossipPull: 7,
+    /** Reputations fade toward obscurity when nobody is talking. */
+    decayPerTick: 0.02
+  },
+
+  turnover: {
+    /**
+     * The cast turns over: new minds wander in, and old ones drift away or die.
+     * The original nine and any mind the keeper made are protected — the world
+     * can surprise its keeper, but it may not erase what he built.
+     */
+    /** Ticks between arrival considerations. */
+    arrivalIntervalTicks: 96,
+    /** Chance of an arrival each time one is considered. */
+    arrivalChance: 0.4,
+    /** The world never grows past this many living minds. */
+    maxCast: 14,
+    /** Ticks between departure considerations. */
+    departureIntervalTicks: 144,
+    /** Chance of a departure each time one is considered. */
+    departureChance: 0.35,
+    /** The world never shrinks below this many living minds. */
+    minCast: 6,
+    /** Connection below this means a mind is adrift. */
+    lonelyThreshold: 22,
+    /** Ticks adrift before leaving becomes thinkable. */
+    lonelyTicks: 240,
+    /** Ticks lived before death enters the picture at all. */
+    deathAgeTicks: 1440,
+    /** Chance a departure is a death rather than a leaving, once old enough. */
+    deathChance: 0.25
+  },
+
+  rumour: {
+    /**
+     * Gossip warps as it spreads. Each retelling has this chance of mutating
+     * the claim: details sharpen or soften, and sometimes the name at the
+     * centre of the story changes. The secret underneath stays what it was —
+     * what the room *says* becomes its own creature.
+     */
+    mutationChance: 0.35,
+    /** Share of mutations that swap the subject's name for someone else's. */
+    nameSwapChance: 0.2,
+    /** Share of mutations that sharpen the claim rather than soften it. */
+    exaggerateChance: 0.35
+  },
+
+  vendetta: {
+    /**
+     * Feuds escalate through stages as resentment between a pair grows:
+     * grudge → rivalry → vendetta. Each stage changes what the pair will do
+     * to each other and how the world talks about it.
+     */
+    grudgeAt: 18,
+    rivalryAt: 35,
+    vendettaAt: 60,
+    /** Betrayal scores this much harder when the pair are in vendetta. */
+    betrayalMultiplier: 1.5,
+    /** Extra confront utility at vendetta stage — it wants settling. */
+    confrontBonus: 14
+  },
+
+  rituals: {
+    /**
+     * Recurring world events on the engine's clock. Rituals give the calendar
+     * a shape: the world gathers, then goes quiet, then gathers again. Minds
+     * feel them in their needs and lean with them in their choices.
+     */
+    list: [
+      {
+        id: "gathering",
+        name: "Gathering Night",
+        everyDays: 7,
+        offsetDays: 5,
+        phase: "dusk",
+        blurb: "the night the world comes together",
+        needs: { connection: 14, esteem: 6, energy: -4 },
+        intentBias: "seek_company",
+        lines: [
+          "It is Gathering Night, and the world leans toward itself.",
+          "Gathering Night: every road leads somewhere with people in it.",
+          "The calendar turns to Gathering Night, and solitude feels like a choice."
+        ]
+      },
+      {
+        id: "quiet",
+        name: "Quiet Day",
+        everyDays: 9,
+        offsetDays: 2,
+        phase: null,
+        blurb: "the day the world holds its breath",
+        needs: { meaning: 10, energy: 6, connection: -5 },
+        intentBias: "observe",
+        lines: [
+          "It is Quiet Day. The world speaks softly, and minds listen.",
+          "Quiet Day: nobody is in a hurry, and that is the point.",
+          "The calendar turns to Quiet Day, and even the gossip rests."
+        ]
+      }
+    ]
+  },
+
+  favours: {
+    /**
+     * Debt written onto the ledger when one mind does another a favour.
+     *
+     * On the edge's `debts` axis, positive means "they owe me" and negative
+     * means "I owe them" — the ledger must never be read backwards, because
+     * the whole point of a favour is knowing who owes whom.
+     */
+    amount: 18,
+    /** Debts at or below this are too small to call in; they settle silently. */
+    trivialBelow: 6,
+    /** Outstanding debt worth acting on — below this, calling in feels petty. */
+    callInThreshold: 14,
+    /**
+     * Ticks of grace after a favour before the debt may be called in.
+     * Asking for repayment the same afternoon the favour was done reads as
+     * a transaction, not a relationship.
+     */
+    graceTicks: 24,
+    /** Debts fade by this much per tick; old obligations quietly stop mattering. */
+    debtDecayPerTick: 0.12,
+    /** Ticks before the same pair can create another favour debt. */
+    createCooldownTicks: 30,
+    /** Ticks before the same creditor may call in another favour from the same debtor. */
+    callInCooldownTicks: 48,
+    /** Utility per point of outstanding debt when scoring the call_in intent. */
+    debtUtilityPull: 1.1
+  },
+
   progression: {
     /**
      * Level curve: level = 1 + floor(sqrt(xp / divisor)).
@@ -198,7 +341,7 @@ export const DEFAULT_CONFIG = {
     /** How many ticks a moment may wait for a model before the engine answers it itself. */
     maxPendingTicks: 3,
     /** Kinds of intent that are always considered moment-worthy when they fire. */
-    alwaysMomentKinds: ["confront", "betray", "confide", "declare"]
+    alwaysMomentKinds: ["confront", "betray", "confide", "declare", "call_in"]
   },
 
   limits: {

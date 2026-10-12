@@ -75,6 +75,15 @@ import { clamp } from "../config.js";
  * @property {string} thought     Last private thought (kept for the UI).
  * @property {number} thoughtAt
  * @property {boolean} retired
+ * @property {number} standing    -100..100. What the room thinks of them: public
+ *                                 reputation, separate from any one mind's private
+ *                                 affection. Earned by public deeds, moved faster
+ *                                 by gossip than by truth.
+ * @property {number} [adriftTicks] Consecutive ticks with connection below the
+ *                                 lonely threshold. Resets when they feel held.
+ * @property {string} [departureKind] "left" or "died", once they are gone.
+ * @property {boolean} seedCast       True for the original nine. They are
+ *                                 protected from random departure.
  */
 
 /** Class definitions: the baseline a mind drifts back toward. */
@@ -198,6 +207,20 @@ export function rollStats(className, archetype, rng) {
 }
 
 /**
+ * One word for what the room thinks of a mind, from its public standing.
+ * @param {number} standing
+ */
+export function standingWord(standing) {
+  if (standing >= 60) return "revered";
+  if (standing >= 30) return "respected";
+  if (standing >= 10) return "well-regarded";
+  if (standing <= -60) return "notorious";
+  if (standing <= -30) return "disreputable";
+  if (standing <= -10) return "suspect";
+  return "unknown";
+}
+
+/**
  * How this mind feels right now, in one word, for prompts and the UI.
  *
  * Order matters: a transient triumph outranks everything, then acute need
@@ -308,6 +331,7 @@ export function needGain(current, amount) {
  * @param {string} spec.regionId
  * @param {string} spec.goalText
  * @param {string} [spec.goalKind]
+ * @param {boolean} [spec.seedCast]
  * @param {import("../rng.js").Rng} rng
  * @param {number} tick
  * @param {import("./memory.js").Memory} memory
@@ -331,6 +355,7 @@ export function createAgent(spec, rng, tick, memory, levelDivisor = 45) {
     homeRegionId: spec.regionId,
     awake: true,
     userCreated: false,
+    seedCast: spec.seedCast || false,
     needs,
     drives,
     mood: "steady",
@@ -352,7 +377,8 @@ export function createAgent(spec, rng, tick, memory, levelDivisor = 45) {
     lastReflectionTick: -1,
     thought: "",
     thoughtAt: 0,
-    retired: false
+    retired: false,
+    standing: 0
   };
 }
 

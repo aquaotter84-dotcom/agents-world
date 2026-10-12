@@ -19,6 +19,10 @@ import { livingAgents, agentById, privateSecretsHeld } from "../model/world.js";
  */
 export function settleRelations(world, agent) {
   decayRelations(agent, world.clock.tick, world.config);
+  // Reputations fade toward obscurity when nobody is talking about you.
+  const decay = world.config.standing.decayPerTick;
+  const s = agent.standing ?? 0;
+  agent.standing = s > 0 ? Math.max(0, s - decay) : Math.min(0, s + decay);
 }
 
 /**
