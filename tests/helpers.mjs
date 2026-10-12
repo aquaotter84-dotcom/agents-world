@@ -38,6 +38,29 @@ export function stubbedAnswer(world, moment) {
       summary: "I chose to look carefully before deciding what matters."
     };
   }
+  if (moment.kind === "goal_approach") {
+    // A proposal has no menu. The model names one of the approaches on offer and
+    // writes it in the mind's own words; cycling keeps long runs from repeating.
+    const offered = /** @type {any} */ (moment.context).availableMethods || ["focus"];
+    const method = offered[agent.proposal.count % offered.length];
+    return {
+      method,
+      approach: `Pushing at ${agent.goal.text.toLowerCase()} — ${method.replace(/_/g, " ")} while it still feels right.`
+    };
+  }
+  if (moment.kind === "petition") {
+    const offered = /** @type {any} */ (moment.context).petitionable || [];
+    const pick = offered[agent.petition.count % Math.max(1, offered.length)];
+    if (!pick) return {};
+    return {
+      ruleKind: pick.ruleKind,
+      petition: `We should have ${pick.name.toLowerCase()}. ${pick.basis}`
+    };
+  }
+  if (moment.kind === "whisper") {
+    const subject = /** @type {any} */ (moment.context).whisperSubject || "something";
+    return { whisper: `There is ${subject} and I would rather the room did not hear it from me.` };
+  }
   let best = moment.options[0];
   let bestScore = -1;
   for (const option of moment.options) {

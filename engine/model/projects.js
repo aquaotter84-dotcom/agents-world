@@ -13,6 +13,7 @@
  *   milestones: {id: string, title: string, threshold: number, reached: boolean, tick: number|null}[],
  *   contributors: Record<string, {work: number, help: number, interference: number, lastTick: number, lastInterferenceTick?: number}>,
  *   interferenceCount: number,
+ *   lastWorkTick: number,
  *   completedTick: number|null,
  *   completionContributors: string[]
  * }}
@@ -32,6 +33,7 @@ export function createNorthWallProject() {
     ],
     contributors: {},
     interferenceCount: 0,
+    lastWorkTick: 0,
     completedTick: null,
     completionContributors: []
   };

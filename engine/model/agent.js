@@ -62,6 +62,22 @@ import { clamp } from "../config.js";
  */
 
 /**
+ * @typedef {object} AgentProposal
+ * @property {number} nextTick        Tick this mind may next be asked for an approach.
+ * @property {number} count           Approaches it has been asked for.
+ * @property {number} acceptedCount   Approaches the engine validated.
+ * @property {number} rejectedCount   Approaches the engine refused.
+ * @property {{tick: number, text: string, method: string, targetId: string|null, accepted: boolean, reason: string, source: string}} [last]
+ */
+
+/**
+ * @typedef {object} AgentPetitionLog
+ * @property {number} nextTick  Tick this mind may next petition or whisper.
+ * @property {number} count
+ * @property {string} [lastText]
+ */
+
+/**
  * @typedef {object} Agent
  * @property {string} id
  * @property {string} name
@@ -90,6 +106,9 @@ import { clamp } from "../config.js";
  * @property {number} level
  * @property {Goal} goal
  * @property {AgentCognition} cognition  Private, durable cognition for the small pilot cast.
+ * @property {AgentProposal} proposal     Bookkeeping for model-authored goal approaches.
+ * @property {AgentPetitionLog} petition  Bookkeeping for petitions to the keeper.
+ * @property {AgentPetitionLog} whisper   Bookkeeping for things told to the keeper privately.
  * @property {Record<string, RelationEdge>} relations
  * @property {Memory} memory
  * @property {number} createdTick
@@ -355,6 +374,21 @@ export function needGain(current, amount) {
  * @param {number} [nextPlanTick]
  * @returns {AgentCognition}
  */
+/**
+ * A JSON-safe proposal record. Every mind gets one: unlike the cognition pilot,
+ * proposing an approach is not limited to a small cast.
+ * @param {number} [nextTick]
+ * @returns {AgentProposal}
+ */
+export function createProposalState(nextTick = 0) {
+  return {
+    nextTick,
+    count: 0,
+    acceptedCount: 0,
+    rejectedCount: 0
+  };
+}
+
 export function createCognitionState(enabled = false, nextPlanTick = -1) {
   return {
     enabled,
@@ -423,6 +457,9 @@ export function createAgent(spec, rng, tick, memory, levelDivisor = 45) {
       priority: 1
     },
     cognition: createCognitionState(),
+    proposal: createProposalState(),
+    petition: { nextTick: 0, count: 0 },
+    whisper: { nextTick: 0, count: 0 },
     relations: {},
     memory,
     createdTick: tick,

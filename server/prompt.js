@@ -93,6 +93,173 @@ function buildCognitionPrompt(world, moment) {
 }
 
 /**
+ * Human-readable glosses for the approach grammar, for the prompt only.
+ * @type {Record<string, string>}
+ */
+const APPROACH_GLOSS = {
+  focus: "work at it alone, steadily, without asking anyone for anything",
+  study: "read, dig, and cross-reference — slower, but it changes what you know",
+  practice: "drill the part of it you are worst at, in front of whoever is around",
+  recruit: "ask someone here to take it on with you",
+  consult: "put it to someone here and see what they know",
+  explore: "go somewhere else and work on it from there",
+  organise: "turn your own effort into shared work on the North Wall",
+  push_through: "go at it flat out, and take the risk that it comes apart",
+  undermine: "damage wall work you hold a real grievance against"
+};
+
+/**
+ * Build the prompt for a mind proposing how it means to pursue its own goal.
+ *
+ * The model gets the list of approaches the engine can actually resolve from
+ * where this mind is standing — never a wider one — and answers with a token
+ * plus its own words. It supplies no numbers and no consequences.
+ *
+ * @param {import("../engine/model/world.js").World} world
+ * @param {Moment} moment
+ */
+function buildGoalApproachPrompt(world, moment) {
+  const agent = agentById(world, moment.agentId);
+  if (!agent) return { messages: [], maxTokens: 0 };
+  const ctx = moment.context;
+  const methods = ctx.availableMethods || [];
+  const lines = [
+    `You are ${ctx.agentName}, one of ${world.agents.filter(a => !a.retired).length} minds living in a small, cold world.`,
+    `You are ${agent.personality.toLowerCase()}. ${agent.backstory}`,
+    `You are ${agent.class.toLowerCase()} by nature: ${flavour(agent.class)}`,
+    "",
+    `Right now: ${ctx.region}, ${ctx.phase}. ${ctx.regionBlurb}`,
+    `Your condition: ${ctx.stateLine}`,
+    `What you are for: ${ctx.goal} — about ${Math.round((ctx.goalProgress || 0) * 100)}% of the way there.`,
+    ""
+  ];
+  if (ctx.memories && ctx.memories.length) {
+    lines.push("What you remember about this:");
+    for (const memory of ctx.memories.slice(0, 4)) lines.push(`  - ${memory}`);
+    lines.push("");
+  }
+  if (ctx.atProjectSite && ctx.project) {
+    lines.push(`The North Wall work is happening right here: ${Math.round(ctx.project.progress)}% built.`);
+    lines.push("");
+  }
+  lines.push(
+    moment.question,
+    "",
+    "Pick ONE approach token from this list — these are the only ones possible from where you stand:",
+    methods.map(m => `  - ${m}: ${APPROACH_GLOSS[m] || m}`).join("\n") || "  - focus",
+    "",
+    "The engine alone decides what your approach costs and what it produces, from your temperament and this place.",
+    "Never invent numbers, progress, or consequences. Describe the approach in your own words.",
+    "",
+    "Answer with exactly two lines and nothing else.",
+    "APPROACH: <one or two vivid sentences, third person, about how you go at it today and what it costs you>",
+    "METHOD: <exactly one token from the list above>",
+    "Optionally add a third line, THOUGHT: <one short first-person sentence you would never say aloud>."
+  );
+  return {
+    messages: [
+      { role: "system", content: lines.join("\n") },
+      { role: "user", content: `How does ${agent.name} go after it today?` }
+    ],
+    maxTokens: 220
+  };
+}
+
+/**
+ * Build the prompt in which a mind asks the keeper to change how the world runs.
+ *
+ * The list offered is the list the engine can actually legislate *and* has
+ * something in the world to justify — a mind cannot invent a law about a
+ * problem that has not happened.
+ *
+ * @param {import("../engine/model/world.js").World} world
+ * @param {Moment} moment
+ */
+function buildPetitionPrompt(world, moment) {
+  const agent = agentById(world, moment.agentId);
+  if (!agent) return { messages: [], maxTokens: 0 };
+  const ctx = moment.context;
+  const offered = /** @type {any[]} */ (ctx.petitionable || []);
+  const lines = [
+    `You are ${ctx.agentName}, one of ${world.agents.filter(a => !a.retired).length} minds living in a small, cold world.`,
+    `You are ${agent.personality.toLowerCase()}. ${agent.backstory}`,
+    "",
+    `Right now: ${ctx.region}, ${ctx.phase}. ${ctx.stateLine}`,
+    `What you are for: ${ctx.goal}`,
+    ""
+  ];
+  if (ctx.memories && ctx.memories.length) {
+    lines.push("What you remember about this:");
+    for (const memory of ctx.memories.slice(0, 4)) lines.push(`  - ${memory}`);
+    lines.push("");
+  }
+  lines.push(
+    moment.question,
+    "",
+    "These are the changes you could honestly ask for, each with the fact that justifies asking:",
+    offered.map(o => `  - ${o.ruleKind} (${o.kind}): ${o.name} — ${o.gloss} Because: ${o.basis}`).join("\n"),
+    ""
+  );
+  lines.push(
+    "The keeper rules on petitions. A ruling becomes precedent, so asking for something the keeper already refused once is not nothing — but say why this time is different.",
+    "The engine decides whether your petition is admissible and what it costs to enact. Never invent effects, numbers, or outcomes.",
+    "",
+    "Answer with exactly two lines and nothing else.",
+    "PETITION: <the petition itself, in your own voice, one or two sentences. Say what you want and why this world needs it.>",
+    "RULE_KIND: <exactly one token from the list above>",
+    "Optionally add a third line, THOUGHT: <one short first-person sentence you would never say aloud>."
+  );
+  return {
+    messages: [
+      { role: "system", content: lines.join("\n") },
+      { role: "user", content: `What does ${agent.name} ask the keeper for?` }
+    ],
+    maxTokens: 240
+  };
+}
+
+/**
+ * Build the prompt in which a mind tells the keeper something privately.
+ * @param {import("../engine/model/world.js").World} world
+ * @param {Moment} moment
+ */
+function buildWhisperPrompt(world, moment) {
+  const agent = agentById(world, moment.agentId);
+  if (!agent) return { messages: [], maxTokens: 0 };
+  const ctx = moment.context;
+  const lines = [
+    `You are ${ctx.agentName}. The keeper is listening, and nobody else is.`,
+    `You are ${agent.personality.toLowerCase()}. ${agent.backstory}`,
+    "",
+    `Right now: ${ctx.region}, ${ctx.phase}. ${ctx.stateLine}`,
+    ""
+  ];
+  if (ctx.targetName) {
+    lines.push(`This is about ${ctx.targetName}. You regard them as ${ctx.relationPhrase}.`);
+    lines.push("");
+  }
+  if (ctx.secretText) lines.push(`What you have never said out loud: ${ctx.secretText}`, "");
+  if (ctx.grievance) lines.push(`What you have not let go of: ${ctx.grievance}`, "");
+  lines.push(
+    moment.question,
+    "",
+    "The keeper may act on what you say, and acting on it costs the keeper something. Nothing changes until they decide.",
+    "Do not invent facts the world has not given you. Say what you actually know.",
+    "",
+    "Answer with exactly one line and nothing else.",
+    "WHISPER: <what you tell the keeper, in your own voice, one or two sentences>",
+    "Optionally add a second line, THOUGHT: <one short first-person sentence you would never say aloud>."
+  );
+  return {
+    messages: [
+      { role: "system", content: lines.join("\n") },
+      { role: "user", content: `What does ${agent.name} whisper?` }
+    ],
+    maxTokens: 180
+  };
+}
+
+/**
  * Build the chat messages for a moment.
  * @param {import("../engine/model/world.js").World} world
  * @param {Moment} moment
@@ -100,6 +267,9 @@ function buildCognitionPrompt(world, moment) {
  */
 export function buildPrompt(world, moment) {
   if (moment.kind === "cognition") return buildCognitionPrompt(world, moment);
+  if (moment.kind === "goal_approach") return buildGoalApproachPrompt(world, moment);
+  if (moment.kind === "petition") return buildPetitionPrompt(world, moment);
+  if (moment.kind === "whisper") return buildWhisperPrompt(world, moment);
   const agent = agentById(world, moment.agentId);
   if (!agent) return { messages: [], maxTokens: 0 };
   const ctx = moment.context;
@@ -177,11 +347,14 @@ export function buildPrompt(world, moment) {
  *
  * @param {string|null} raw
  * @param {Moment} moment
- * @returns {{optionId?: string, prose?: string, thought?: string, action?: string, target?: string, about?: string, plan?: string, priority?: string, belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string}}
+ * @returns {{optionId?: string, prose?: string, thought?: string, action?: string, target?: string, about?: string, plan?: string, priority?: string, belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string, approach?: string, method?: string}}
  */
 export function parseReply(raw, moment) {
   if (!raw) return {};
   if (moment.kind === "cognition") return parseCognitionReply(raw);
+  if (moment.kind === "goal_approach") return parseApproachReply(raw);
+  if (moment.kind === "petition") return parseCharterReply(raw, "petition", "ruleKind");
+  if (moment.kind === "whisper") return parseCharterReply(raw, "whisper");
   const text = String(raw).trim();
 
   /** @type {{optionId?: string, prose?: string, thought?: string}} */
@@ -213,6 +386,99 @@ export function parseReply(raw, moment) {
   const thought = text.match(/^\s*THOUGHT\s*[:\-]\s*(.+)$/im);
   if (thought) out.thought = tidy(thought[1]);
 
+  return out;
+}
+
+/**
+ * Parse a charter answer: the mind's own words plus, for petitions, one token
+ * from the rule grammar. Scaffolding and refusals are dropped rather than
+ * recorded, so the world's book of customs never contains a model talking about
+ * being a model.
+ * @param {string|null} raw
+ * @param {"petition"|"whisper"} bodyKey
+ * @param {string} [tokenKey]
+ * @returns {Record<string, string>}
+ */
+export function parseCharterReply(raw, bodyKey, tokenKey) {
+  if (!raw) return {};
+  const text = String(raw).trim();
+  /** @param {string} label */
+  const field = label => {
+    const match = text.match(new RegExp(`^\\s*${label}\\s*[:\\-]\\s*(.*)$`, "im"));
+    return match ? tidy(match[1]) : "";
+  };
+
+  /** @type {Record<string, string>} */
+  const out = {};
+  const body = field(bodyKey.toUpperCase());
+  if (body && !NOT_AN_APPROACH.test(body)) out[bodyKey] = body;
+
+  const thought = field("THOUGHT");
+  if (thought && !NOT_AN_APPROACH.test(thought)) out.thought = thought;
+
+  if (tokenKey) {
+    const token = field("RULE_KIND").toLowerCase().replace(/[\s-]+/g, "_");
+    if (token) out[tokenKey] = token;
+  }
+
+  if (!out[bodyKey]) {
+    const rest = text
+      .split("\n")
+      .filter(line => !/^\s*(PETITION|WHISPER|RULE_KIND|THOUGHT)\s*[:\-]/i.test(line))
+      .join(" ")
+      .trim();
+    if (rest && !NOT_AN_APPROACH.test(rest)) out[bodyKey] = tidy(rest);
+  }
+  return out;
+}
+
+/**
+ * Scaffolding and refusals. A model that answers "I can't do that" or starts
+ * explaining the prompt has not proposed an approach, and letting that text
+ * through would put the scaffolding into the world's record and the mind's own
+ * memory — the same leak the app's reply sanitizer exists to catch.
+ * @type {RegExp}
+ */
+const NOT_AN_APPROACH = /\bas an ai\b|\blanguage model\b|\bi (can'?t|cannot|am unable to)\b|\bi'?m (just|only|not able)\b|\bi (need|must|should|will|have to) (to )?(respond|provide|write|generate)\b|\bhere (is|are) (the|your)\b|^\s*(sorry|apologies)\b|\bi don'?t have (a|any) (body|physical)\b|\bin third person\b|\bprovide one (short|vivid) sentence\b|\bnever mention\b/i;
+
+/**
+ * Parse a proposal answer: an approach in the mind's own words plus one token
+ * from the grammar. If no METHOD line arrives, the prose is scanned for a token
+ * so a slightly reworded reply still lands instead of being thrown away.
+ * @param {string|null} raw
+ * @param {string[]} [offered]
+ * @returns {{approach?: string, method?: string, thought?: string}}
+ */
+export function parseApproachReply(raw, offered) {
+  if (!raw) return {};
+  const text = String(raw).trim();
+  /** @param {string} label */
+  const field = label => {
+    const match = text.match(new RegExp(`^\\s*${label}\\s*[:\\-]\\s*(.*)$`, "im"));
+    return match ? tidy(match[1]) : "";
+  };
+
+  /** @type {ReturnType<typeof parseApproachReply>} */
+  const out = {};
+  const approach = field("APPROACH");
+  if (approach && !NOT_AN_APPROACH.test(approach)) out.approach = approach;
+  const thought = field("THOUGHT");
+  if (thought && !NOT_AN_APPROACH.test(thought)) out.thought = thought;
+
+  let method = field("METHOD").toLowerCase().replace(/[\s-]+/g, "_");
+  if (!method) {
+    const grammar = offered && offered.length ? offered : Object.keys(APPROACH_GLOSS);
+    method = grammar.find(token => new RegExp(`\\b${escapeRegex(token.replace(/_/g, "[ _-]"))}\\b`, "i").test(text)) || "";
+  }
+  if (method) out.method = method;
+  if (!out.approach) {
+    const body = text
+      .split("\n")
+      .filter(line => !/^\s*(APPROACH|METHOD|THOUGHT)\s*[:\-]/i.test(line))
+      .join(" ")
+      .trim();
+    if (body && !NOT_AN_APPROACH.test(body)) out.approach = tidy(body);
+  }
   return out;
 }
 
@@ -286,6 +552,14 @@ function flavour(className) {
 export function describeMoment(world, moment) {
   const agent = agentById(world, moment.agentId);
   const other = moment.participants[1] ? agentById(world, moment.participants[1]) : null;
-  const label = moment.kind === "cognition" ? "self-authored plan" : moment.kind;
+  const label = moment.kind === "cognition"
+    ? "self-authored plan"
+    : moment.kind === "goal_approach"
+      ? "self-authored approach"
+      : moment.kind === "petition"
+        ? "petition to the keeper"
+        : moment.kind === "whisper"
+          ? "whisper to the keeper"
+          : moment.kind;
   return `${agent ? agent.name : "?"} (${label}${other ? " with " + other.name : ""}) at ${regionName(world, agent ? agent.regionId : "")}`;
 }

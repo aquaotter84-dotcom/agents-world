@@ -97,7 +97,7 @@ export function buildMoment(world, agent, intent, ranked) {
  * @param {import("../model/agent.js").Agent} agent
  * @param {string|null} targetId
  */
-function contextFor(world, agent, targetId) {
+export function contextFor(world, agent, targetId) {
   const target = targetId ? agentById(world, targetId) : null;
   const region = regionById(world, agent.regionId);
   const memories = recall(agent.memory, {

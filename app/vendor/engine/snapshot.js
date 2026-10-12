@@ -13,7 +13,8 @@ import { createRng } from "./rng.js";
 import { makeConfig } from "./config.js";
 import { makeIdFactory } from "./model/world.js";
 import { createNorthWallProject } from "./model/projects.js";
-import { createCognitionState } from "./model/agent.js";
+import { normalizeCharter } from "./model/charter.js";
+import { createCognitionState, createProposalState } from "./model/agent.js";
 
 /**
  * The parts of a world worth persisting. Derived data (factions, stats) is
@@ -29,6 +30,7 @@ const PERSISTED = [
   "tallies",
   "secrets",
   "project",
+  "charter",
   "pending",
   "resolved",
   "chronicle",
@@ -84,6 +86,9 @@ export function deserializeWorld(input) {
   // Older v2 worlds predate the shared project; give them the same deterministic
   // initial project state without drawing from or perturbing the RNG stream.
   world.project = data.project || createNorthWallProject();
+  if (!Number.isFinite(world.project.lastWorkTick)) world.project.lastWorkTick = 0;
+  // A world saved before the charter existed simply has no customs yet.
+  world.charter = normalizeCharter(data.charter);
   const pilotCount = Math.max(0, Math.floor(world.config.cognition.pilotCount));
   const interval = Math.max(1, world.config.cognition.planIntervalTicks);
   for (let index = 0; index < world.agents.length; index += 1) {
@@ -102,6 +107,28 @@ export function deserializeWorld(input) {
     if (!Number.isFinite(agent.cognition.nextPlanTick)) agent.cognition.nextPlanTick = enabled ? offset : -1;
     if (!Number.isFinite(agent.cognition.lastPlanTick)) agent.cognition.lastPlanTick = -1;
     if (!Number.isFinite(agent.cognition.planCount)) agent.cognition.planCount = 0;
+
+    // A world saved before proposal-based minds existed has no proposal record.
+    // Stagger the first approach the same way cognition staggers its first plan,
+    // so a resumed world does not ask all nine minds at once.
+    const savedProposal = agent.proposal;
+    const proposalInterval = Math.max(1, world.config.proposals.intervalTicks);
+    const proposalOffset = 1 + Math.floor(index * proposalInterval / Math.max(1, world.agents.length));
+    agent.proposal = {
+      ...createProposalState(proposalOffset),
+      ...(savedProposal || {})
+    };
+    if (!Number.isFinite(agent.proposal.nextTick)) agent.proposal.nextTick = proposalOffset;
+    if (!Number.isFinite(agent.proposal.count)) agent.proposal.count = 0;
+    if (!Number.isFinite(agent.proposal.acceptedCount)) agent.proposal.acceptedCount = 0;
+    if (!Number.isFinite(agent.proposal.rejectedCount)) agent.proposal.rejectedCount = 0;
+
+    if (!agent.petition || typeof agent.petition !== "object") agent.petition = { nextTick: 0, count: 0 };
+    if (!Number.isFinite(agent.petition.nextTick)) agent.petition.nextTick = 0;
+    if (!Number.isFinite(agent.petition.count)) agent.petition.count = 0;
+    if (!agent.whisper || typeof agent.whisper !== "object") agent.whisper = { nextTick: 0, count: 0 };
+    if (!Number.isFinite(agent.whisper.nextTick)) agent.whisper.nextTick = 0;
+    if (!Number.isFinite(agent.whisper.count)) agent.whisper.count = 0;
   }
   world.rng = rng;
   world.idCounters = counters;

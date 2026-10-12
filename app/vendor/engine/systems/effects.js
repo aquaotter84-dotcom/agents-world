@@ -18,6 +18,8 @@ import { grantXp, triumph, needGain } from "../model/agent.js";
 import { remember } from "../model/memory.js";
 import { logEvent } from "../model/events.js";
 import { learnSecret, publishSecret, createSecret, agentById, privateSecretsHeld } from "../model/world.js";
+import { ruleStrength } from "../model/charter.js";
+import { recordWallRaised } from "./charter.js";
 
 /**
  * @typedef {{op: string} & Record<string, any>} EffectOp
@@ -111,6 +113,11 @@ function completeNorthWall(world, tick) {
     }, world.nextId);
   }
 
+  // The wall is the world's shared win condition, so it is recorded where the
+  // world keeps what it decided together — and it becomes the precedent every
+  // later petition is measured against.
+  recordWallRaised(world, ids);
+
   // Work done side by side leaves a durable mark on how the builders regard
   // one another; the project is not just a progress bar with a completion text.
   for (let i = 0; i < ids.length; i++) {
@@ -152,13 +159,17 @@ function applyProjectWork(world, op, tick) {
   const project = world.project;
   const actor = agentById(world, op.agent);
   if (!project || project.status !== "active" || !actor || actor.retired) return null;
-  const amount = clamp(Number(op.amount) || 0, 1, 24);
+  // An enacted "the wall comes first" makes the same effort go further. The
+  // bonus is the engine's, from the rule's strength — never the model's.
+  const bonus = 1 + ruleStrength(world.charter, "wall_first") * 0.15;
+  const amount = clamp(Math.round((Number(op.amount) || 0) * bonus), 1, 24);
   const record = project.contributors[actor.id] || (project.contributors[actor.id] = {
     work: 0, help: 0, interference: 0, lastTick: tick
   });
   if (op.kind === "help") record.help += amount;
   else record.work += amount;
   record.lastTick = tick;
+  project.lastWorkTick = tick;
   project.progress = clamp(project.progress + amount, 0, 100);
 
   for (const milestone of project.milestones) {
@@ -193,7 +204,10 @@ function applyProjectInterference(world, op, tick) {
   const target = agentById(world, op.targetId) || Object.entries(project.contributors)
     .sort((a, b) => (b[1].work + b[1].help) - (a[1].work + a[1].help))
     .map(([id]) => agentById(world, id)).find(a => a && a.id !== actor.id);
-  const loss = clamp(Number(op.amount) || 8, 1, 12);
+  // A world that has legislated against undermining takes less damage from it:
+  // people are watching for it now.
+  const deterrence = 1 / (1 + ruleStrength(world.charter, "no_undermining") * 0.3);
+  const loss = clamp(Math.round((Number(op.amount) || 8) * deterrence), 1, 12);
   project.progress = Math.max(0, project.progress - loss);
   project.interferenceCount += 1;
   const record = project.contributors[actor.id] || (project.contributors[actor.id] = {
