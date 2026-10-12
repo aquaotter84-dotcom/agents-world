@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node tools/serve.mjs",
+    "service": "node server/index.js --tick-seconds 60",
     "sim": "node server/index.js --offline --tick-seconds 0",
     "test": "node --test \"tests/**/*.test.js\"",
     "typecheck": "tsc --noEmit",

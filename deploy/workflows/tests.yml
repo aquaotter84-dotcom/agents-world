@@ -1,0 +1,48 @@
+# Test Agents World
+#
+# Runs on every push and pull request. The APK workflow builds the app but never
+# exercises it; this one checks the engine, the headless runner, the dev server
+# and the app itself (booted in a DOM against the real vendored engine).
+
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # app/vendor is a copy of engine/ (the app has no build step). If someone
+      # edits the engine and forgets to re-vendor, the phone runs stale rules.
+      - name: Vendored engine matches engine/
+        run: |
+          bash tools/sync-vendor.sh
+          if [ -n "$(git status --porcelain -- app/vendor)" ]; then
+            echo "app/vendor is out of date. Run tools/sync-vendor.sh and commit the result."
+            git status --porcelain -- app/vendor
+            git diff --stat -- app/vendor
+            exit 1
+          fi

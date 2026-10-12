@@ -17,7 +17,7 @@
  * simulation and slowed down for a live one without touching the engine.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,7 +40,7 @@ const SEED = typeof args.seed === "string" || typeof args.seed === "number" ? ar
 const TICK_SECONDS = Number(args["tick-seconds"] ?? process.env.TICK_SECONDS ?? 90);
 const MAX_TICKS = args.ticks !== undefined ? Number(args.ticks) : Infinity;
 const SAVE_PATH = resolve(ROOT, String(args.save || "data/world.json"));
-const SAVE_EVERY = Number(args["save-every"] ?? 20);
+const SAVE_EVERY = Number(args["save-every"] ?? 5);
 const FRESH = Boolean(args.fresh);
 const QUIET = Boolean(args.quiet);
 
@@ -86,13 +86,18 @@ let tickCount = 0;
 /** @type {Promise<void>} */
 let inFlight = Promise.resolve();
 
-process.on("SIGINT", () => {
+// A signal can arrive while the loop is asleep between ticks, and waiting out
+// the rest of a tick interval before exiting is no way to stop a service. The
+// world is always consistent between steps (step is synchronous), so saving
+// right here and exiting is safe.
+const onStop = () => {
   log("\nStopping. Saving…");
   running = false;
-});
-process.on("SIGTERM", () => {
-  running = false;
-});
+  save();
+  process.exit(0);
+};
+process.on("SIGINT", onStop);
+process.on("SIGTERM", onStop);
 
 /**
  * Answer every pending moment we can afford to. Runs alongside the tick loop,
@@ -134,6 +139,9 @@ async function tickOnce() {
 }
 
 async function main() {
+  // Write the world straight away, so anything reading the save (the app, a
+  // status check) sees a living world from the moment the service starts.
+  save();
   // 0 means "as fast as the engine can go" — used for fast-forwarding a world
   // to give it history, and by the offline simulation runs.
   const intervalMs = Math.max(0, TICK_SECONDS * 1000);
@@ -173,10 +181,17 @@ async function main() {
   log(`Saved to ${SAVE_PATH}`);
 }
 
+/**
+ * Write the save atomically: the phone app and the dev server read this file
+ * while the runner may be writing it, so a reader must only ever see a whole
+ * world, never half of one.
+ */
 function save() {
   try {
     mkdirSync(dirname(SAVE_PATH), { recursive: true });
-    writeFileSync(SAVE_PATH, serializeWorld(world), "utf8");
+    const tmp = SAVE_PATH + ".tmp";
+    writeFileSync(tmp, serializeWorld(world), "utf8");
+    renameSync(tmp, SAVE_PATH);
   } catch (err) {
     console.error(`could not save: ${err instanceof Error ? err.message : err}`);
   }

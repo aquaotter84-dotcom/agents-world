@@ -16,6 +16,7 @@ import { agentById, regionName, secretClaimFor, livingAgents } from "../model/wo
 import { nextStepToward, unfamiliarRegions, solitaryRegions, sociableTarget } from "../model/regions.js";
 import { temperamentOverlap } from "../model/agent.js";
 import { recall } from "../model/memory.js";
+import { composeScene } from "./scene.js";
 import { phrase } from "../decision/prose.js";
 import { isNight } from "../clock.js";
 import { generateIntents } from "../decision/intents.js";
@@ -34,6 +35,7 @@ import { generateIntents } from "../decision/intents.js";
  * @property {string} eventKind
  * @property {number} significance
  * @property {boolean} quiet      True when this shouldn't clutter the public feed.
+ * @property {{speakerId: string, text: string}[]} [scene]  Transcript of a conversation, if one happened.
  */
 
 /**
@@ -248,7 +250,10 @@ export function socialEncounter(world, agent, other, mode) {
     text: phrase(world, agent, variant, { other: other.name, region }),
     eventKind: "contact",
     significance: Math.abs(quality) > 0.5 ? 0.45 : 0.2,
-    quiet: Math.abs(quality) < 0.25
+    quiet: Math.abs(quality) < 0.25,
+    // The transcript behind the summary line. Only worth composing when the
+    // meeting is loud enough to end up in the record.
+    scene: Math.abs(quality) >= 0.25 ? composeScene(world, agent, other, quality, region) : undefined
   };
 }
 

@@ -45,9 +45,9 @@ function stubCtx() {
  * its own module registry, because the app keeps its state in module scope.
  */
 /**
- * @param {{ savedState?: any }} [opts]
+ * @param {{ savedState?: any, serviceJson?: string | null }} [opts]
  */
-async function bootApp({ savedState = null } = {}) {
+async function bootApp({ savedState = null, serviceJson = null } = {}) {
   const dom = new JSDOM(html, { url: "http://localhost/" });
   const window = /** @type {any} */ (dom.window);
 
@@ -97,7 +97,15 @@ async function bootApp({ savedState = null } = {}) {
     Node: window.Node,
     Event: window.Event,
     MouseEvent: window.MouseEvent,
-    getComputedStyle: window.getComputedStyle
+    getComputedStyle: window.getComputedStyle,
+    // The background service is reached over relative URLs; stub it when a test
+    // says one is running, and otherwise make it unreachable, as in the APK.
+    fetch: async (/** @type {string} */ url) => {
+      if (serviceJson && String(url).endsWith("api/world")) {
+        return { ok: true, text: async () => serviceJson };
+      }
+      throw new TypeError("no service");
+    }
   };
   // Keep the originals: deleting an override would delete Node's real global too.
   const originals = new Map();
@@ -109,6 +117,9 @@ async function bootApp({ savedState = null } = {}) {
   // Cache-bust so each boot re-evaluates the module with the globals in place.
   const mod = await import(`../app/app.js?boot=${Math.random()}`);
   window.document.dispatchEvent(new window.Event("DOMContentLoaded"));
+  // Boot is async now (it probes for the background service first). Let the
+  // probe settle before the test looks at the world.
+  await new Promise(r => setImmediate(r));
 
   const restore = () => {
     for (const t of timers) (t.kind === "interval" ? clearInterval : clearTimeout)(t.id);
@@ -172,7 +183,7 @@ test("the record carries a chronicle and the secrets people are keeping", async 
   try {
     // The opening ticks close at least one day, which is what a chronicle entry needs.
     const tabs = $$(doc, "#record-tabs .rtab");
-    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets"]);
+    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets", "Keeper"]);
 
     tabs.find(t => t.dataset.view === "chronicle").click();
     const days = $$(doc, "#record-pane .day-card");
@@ -248,4 +259,80 @@ test("nothing in the render path writes to the simulation", async () => {
     assert.ok(edgeCounts.every((/** @type {number} */ n) => n <= before.agents.length - 1),
       "no mind knows more minds than exist");
   } finally { restore(); }
+});
+
+test("when the background service is running, the app shows its world and does not tick on its own", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const served = createWorld({ seed: 42 });
+  runTicks(served, 240);
+  const serviceJson = serializeWorld(served);
+  const servedTick = served.clock.tick;
+
+  const app = await bootApp({ serviceJson });
+  try {
+    const stored = JSON.parse(app.window.localStorage.getItem("agentsworld.v2"));
+    const adopted = JSON.parse(stored.world);
+    assert.equal(adopted.clock.tick, servedTick, "the app adopts the service's world as it stands");
+    assert.equal(adopted.seed, 42);
+
+    // A manual tick must not move a world the service is keeping alive.
+    app.document.getElementById("btn-tick").click();
+    await new Promise(r => setImmediate(r));
+    const after = JSON.parse(JSON.parse(app.window.localStorage.getItem("agentsworld.v2")).world);
+    assert.equal(after.clock.tick, servedTick, "the app leaves the clock to the service");
+  } finally { app.restore(); }
+});
+
+
+test("a conversation shows up in the feed as the lines the two minds said", async () => {
+  const { createWorld, runTicks, serializeWorld, livingAgents } = await import("../engine/index.js");
+  const { logEvent } = await import("../engine/model/events.js");
+  const world = createWorld({ seed: 77 });
+  runTicks(world, 20);
+  const [a, b] = livingAgents(world);
+  logEvent(world, {
+    kind: "contact",
+    agentId: a.id,
+    subjectId: b.id,
+    text: `${a.name} and ${b.name} talked for a while, and it was easy.`,
+    significance: 0.45,
+    scene: [
+      { speakerId: a.id, text: "You look like the day has been long." },
+      { speakerId: b.id, text: "Long day, yes. But this helps." }
+    ]
+  });
+
+  const app = await bootApp({ serviceJson: serializeWorld(world) });
+  try {
+    const lines = $$(app.document.getElementById("activity-feed") || app.document, ".sline");
+    assert.ok(lines.length >= 2, "both lines of the conversation should be on screen");
+    const said = lines.map(l => l.textContent.trim());
+    assert.ok(said.some(t => t.includes("this helps")), said.join(" | "));
+    assert.ok(said.some(t => t.startsWith(a.name)), "each line is attributed to its speaker");
+  } finally { app.restore(); }
+});
+
+test("the keeper earns rank by what they do, and every mind has a face on screen", async () => {
+  const app = await bootApp();
+  try {
+    const doc = app.document;
+    const strip = doc.getElementById("keeper-strip");
+    assert.ok(strip && strip.textContent.includes("Passerby"), "a new keeper starts as a Passerby");
+    const xpBefore = Number((strip.textContent.match(/(\d+) XP/) || [])[1]);
+
+    // A first visit to a screen is a first-time act: it pays once.
+    const minds = [...doc.querySelectorAll("#record-tabs .rtab")].find(t => t.dataset.view === "keeper");
+    minds.click();
+    const xpAfter = Number((doc.getElementById("keeper-strip").textContent.match(/(\d+) XP/) || [])[1]);
+    assert.ok(xpAfter >= xpBefore, "XP never goes down");
+
+    // The Keeper view lists every achievement, unlocked or not.
+    const panel = doc.querySelector("#record-pane .keeper-panel");
+    assert.ok(panel, "the Keeper view renders");
+    assert.equal(panel.querySelectorAll(".ach").length, 10);
+
+    // Each mind is drawn as a portrait, not an emoji in a circle.
+    const portraits = doc.querySelectorAll("#agents-list .portrait svg");
+    assert.ok(portraits.length >= 9, "every mind in the list has a portrait, got " + portraits.length);
+  } finally { app.restore(); }
 });
