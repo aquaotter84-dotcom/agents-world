@@ -82,6 +82,8 @@ async function bootApp({ savedState = null, serviceJson = null } = {}) {
     return id;
   };
 
+  /** Every URL the app asked for, so a test can see where it looked. @type {string[]} */
+  const requested = [];
   const globals = {
     window: /** @type {any} */ (window),
     document: window.document,
@@ -101,6 +103,7 @@ async function bootApp({ savedState = null, serviceJson = null } = {}) {
     // The background service is reached over relative URLs; stub it when a test
     // says one is running, and otherwise make it unreachable, as in the APK.
     fetch: async (/** @type {string} */ url) => {
+      requested.push(String(url));
       if (serviceJson && String(url).endsWith("api/world")) {
         return { ok: true, text: async () => serviceJson };
       }
@@ -129,7 +132,7 @@ async function bootApp({ savedState = null, serviceJson = null } = {}) {
     }
     dom.window.close();
   };
-  return { window, document: window.document, mod, restore };
+  return { window, document: window.document, mod, restore, requested };
 }
 
 /** @param {any} doc @param {string} id */
@@ -361,6 +364,134 @@ test("when the background service is running, the app shows its world and does n
   } finally { app.restore(); }
 });
 
+
+test("coming back after hours shows what the world did while the keeper was gone", async () => {
+  const { createWorld, serializeWorld } = await import("../engine/index.js");
+  const world = createWorld({ seed: 12 });
+  const savedState = {
+    world: serializeWorld(world),
+    settings: { tickSeconds: 45 },
+    chats: {},
+    chatRoles: {},
+    ui: {},
+    lastSeenAt: Date.now() - 4 * 3600 * 1000
+  };
+
+  const app = await bootApp({ savedState });
+  try {
+    const doc = app.document;
+    // The world ran on without a keeper. The Chronicle is where absence is
+    // accounted for, so that is where the card goes.
+    doc.querySelector('.rtab[data-view="chronicle"]').click();
+    const card = doc.querySelector("#record-pane .away-card");
+    assert.ok(card, "the absence has a card of its own in the Chronicle");
+    assert.match(card.textContent, /While you were away/);
+    assert.equal(card.querySelectorAll(".away-meter").length, 3, "the keeper's score is on it");
+    assert.equal(doc.querySelector("#record-pane").firstElementChild, card,
+      "and it sits above the days it summarizes");
+    // A digest that reports nothing would not have been written.
+    const stored = JSON.parse(app.window.localStorage.getItem("agentsworld.v2"));
+    assert.ok(stored.digest && stored.digest.ticks > 0, "the digest says how long the world ran alone");
+
+    // Reading it is an act: dismissed, it is gone from the record and the save.
+    card.querySelector(".digest-dismiss").click();
+    assert.equal(doc.querySelector("#record-pane .away-card"), null);
+    assert.equal(JSON.parse(app.window.localStorage.getItem("agentsworld.v2")).digest, null);
+  } finally { app.restore(); }
+});
+
+test("when the background service kept the world alive, the app says what it did in the keeper's absence", async () => {
+  const { createWorld, runTicks, serializeWorld, deserializeWorld } = await import("../engine/index.js");
+  const mine = createWorld({ seed: 42 });
+  runTicks(mine, 108);
+  const savedState = {
+    world: serializeWorld(mine),
+    settings: { tickSeconds: 45 },
+    chats: {},
+    chatRoles: {},
+    ui: {},
+    lastSeenAt: Date.now() - 3 * 3600 * 1000
+  };
+  // The service holds the same world, three hours further along.
+  const served = deserializeWorld(serializeWorld(mine));
+  runTicks(served, 240);
+
+  const app = await bootApp({ savedState, serviceJson: serializeWorld(served) });
+  try {
+    const doc = app.document;
+    const stored = JSON.parse(app.window.localStorage.getItem("agentsworld.v2"));
+    assert.equal(JSON.parse(stored.world).clock.tick, served.clock.tick,
+      "the service's world is the one adopted");
+    assert.ok(stored.digest && stored.digest.ticks === 240,
+      "the gap between left and lived is what the keeper is told about");
+    const toast = doc.getElementById("toast");
+    assert.ok(toast && /While you were away/.test(toast.textContent),
+      "and the keeper hears about it on the way in");
+
+    doc.querySelector('.rtab[data-view="chronicle"]').click();
+    assert.ok(doc.querySelector("#record-pane .away-card"),
+      "the record keeps it after the toast is gone");
+  } finally { app.restore(); }
+});
+
+test("the keeper can point the app at a world kept elsewhere and see it answer", async () => {
+  const { createWorld, runTicks, serializeWorld, deserializeWorld } = await import("../engine/index.js");
+  const mine = createWorld({ seed: 4 });
+  runTicks(mine, 96);
+  for (const agent of mine.agents) {
+    agent.awake = true;
+    agent.needs.energy = 80;
+  }
+  const savedState = {
+    world: serializeWorld(mine),
+    settings: { tickSeconds: 45, serviceUrl: "https://world.example/" },
+    chats: {},
+    chatRoles: {},
+    ui: {},
+    lastSeenAt: Date.now() - 3600 * 1000
+  };
+  // The same world, a day and a half further along, kept by something else.
+  const hosted = deserializeWorld(serializeWorld(mine));
+  runTicks(hosted, 120);
+
+  const app = await bootApp({ savedState, serviceJson: serializeWorld(hosted) });
+  try {
+    const doc = app.document;
+    assert.equal(app.requested[0], "https://world.example/api/world",
+      "the app asks the address the keeper set, not this origin");
+    const stored = JSON.parse(doc.defaultView.localStorage.getItem("agentsworld.v2"));
+    assert.equal(JSON.parse(stored.world).clock.tick, hosted.clock.tick,
+      "and adopts the world it was pointed at");
+    assert.ok(stored.digest && stored.digest.ticks === 120,
+      "the gap between left and lived is what the keeper is told about");
+    // The board says where the world is kept — the keeper never has to wonder
+    // whether the thing on screen is theirs or somebody else's clock.
+    assert.match(text(doc, "live-badge"), /REMOTE/);
+    assert.match(text(doc, "live-note"), /world\.example/);
+
+    // Asking again by hand is a keeper action, and it answers plainly.
+    doc.querySelector('.tab[data-tab="admin"]').click();
+    assert.equal(doc.getElementById("set-service").value, "https://world.example/");
+    doc.getElementById("btn-service-check").click();
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    assert.match(text(doc, "service-status"), /Found it\. Day \d+, tick \d+/);
+  } finally { app.restore(); }
+});
+
+test("with no address set the app looks at its own origin, and says so when nothing answers", async () => {
+  const app = await bootApp();
+  try {
+    const doc = app.document;
+    assert.equal(app.requested[0], "/api/world", "with no service URL the probe is relative");
+    doc.querySelector('.tab[data-tab="admin"]').click();
+    doc.getElementById("btn-service-check").click();
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+    assert.match(text(doc, "service-status"), /keeping its own world/);
+    assert.match(text(doc, "live-badge"), /SELF-RUNNING/, "and the world keeps running here");
+  } finally { app.restore(); }
+});
 
 test("a conversation shows up in the feed as the lines the two minds said", async () => {
   const { createWorld, runTicks, serializeWorld, livingAgents } = await import("../engine/index.js");

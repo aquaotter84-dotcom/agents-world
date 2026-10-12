@@ -599,3 +599,25 @@ textarea { resize: vertical; min-height: 56px; }
 .sign-card.live { background: rgba(196,170,240,.07); }
 .sign-card p { margin: 0; }
 .sign-card .note { display: block; }
+
+/* ---- "while you were away": what the world did without a witness ---- */
+.away-card {
+  border-color: rgba(238, 203, 116, 0.5);
+  background: linear-gradient(180deg, rgba(238, 203, 116, 0.09), transparent 70%);
+}
+.away-lines { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.away-lines p { margin: 0; }
+.away-line.death { color: #e8a6a1; }
+.away-line.inherited { color: #d9a2c4; font-style: italic; }
+.away-line.law, .away-line.role { color: #cfe3a8; }
+.away-line.feud { color: #e8b48a; }
+.away-line.wall { color: #9fd6c9; }
+.away-line.quiet { color: #e8a6a1; font-weight: 600; }
+.away-meters { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0; font-size: 12px; }
+.away-meter b { font-weight: 600; }
+.away-meter .up { color: #9fd8a0; }
+.away-meter .down { color: #e8a6a1; }
+.away-card .digest-dismiss { margin-top: 4px; }
+
+/* ---- where the world is kept: the live badge says so ---- */
+#live-badge.remote { border-color: rgba(159, 214, 201, 0.5); }

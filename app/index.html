@@ -111,6 +111,21 @@
       </div>
 
       <div class="card form">
+        <p class="eyebrow">The world away from this device</p>
+        <p class="note">Left empty, this app keeps its own world, and time missed while it was closed is
+          paid back on the next launch. Point it at a world that is already running somewhere else (the
+          README's "always-on world") and the world ticks whether or not this app is open: what happened
+          while you were gone is waiting in the Chronicle when you come back.</p>
+        <label>World address <span class="note">(optional)</span>
+          <input id="set-service" type="text" placeholder="https://your-world.example" autocomplete="off">
+        </label>
+        <div class="row">
+          <button id="btn-service-check" class="btn small">Check now</button>
+        </div>
+        <p id="service-status" class="note" aria-live="polite"></p>
+      </div>
+
+      <div class="card form">
         <p class="eyebrow">World save insurance</p>
         <p class="note">Download the complete simulated world — minds, memories, relationships, secrets, project progress, and replay state — or restore it later from a backup JSON file. Import replaces the current local world; API keys, chats, and keeper progress are not included. Stop the background service before restoring its world.</p>
         <div class="row">

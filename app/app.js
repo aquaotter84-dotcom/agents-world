@@ -45,6 +45,7 @@ import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
 import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing, mourningMarks, divineMarks } from "./board.js";
+import { digestMark, awayDigest, digestLine } from "./digest.js";
 
 const STORE_KEY = "agentsworld.v2";
 /**
@@ -89,12 +90,14 @@ const ICONS = ["✦", "✧", "❖", "◉", "◎", "⛨", "⛉", "⚒", "☾", "�
 
 /* ---------- state ---------- */
 let world = null;
-let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45 };
+let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45, serviceUrl: "" };
 let chats = {};
 let chatRoles = {};
 let ui = { selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
 let lastSeenAt = Date.now();
 let keeper = emptyKeeper();
+/** The last "while you were away" digest, kept until the keeper has read it. */
+let lastDigest = null;
 
 /* ---------- the background service ----------
  * When the runner (server/index.js) is alive it owns the clock: the world keeps
@@ -106,9 +109,21 @@ let servicePollTimer = null;
 let serviceLost = false;
 const SERVICE_POLL_MS = 10000;
 
+/**
+ * Where the world is kept, if the keeper has pointed this app at a service:
+ * an empty setting means "whatever origin is serving this app".
+ */
+function serviceBase() {
+  return String(settings.serviceUrl || "").trim().replace(/\/+$/, "");
+}
+function serviceHost() {
+  const base = serviceBase();
+  if (!base) return "this server";
+  try { return new URL(base).host; } catch (e) { return base; }
+}
 async function probeService() {
   try {
-    const r = await fetch("api/world", { cache: "no-store" });
+    const r = await fetch(serviceBase() + "/api/world", { cache: "no-store" });
     if (!r.ok) return null;
     return deserializeWorld(await r.text());
   } catch (e) {
@@ -116,28 +131,84 @@ async function probeService() {
   }
 }
 
-function startServicePolling() {
-  if (servicePollTimer) clearInterval(servicePollTimer);
-  servicePollTimer = setInterval(async () => {
-    const next = await probeService();
-    if (!next) {
-      if (!serviceLost) toast("The background world has gone quiet — it will catch up when it is back.");
-      serviceLost = true;
-      return;
-    }
-    serviceLost = false;
-    if (next.clock.tick === world.clock.tick) return;
+async function pollServiceOnce() {
+  const next = await probeService();
+  if (!next) {
+    if (!serviceLost) toast("The world you were watching has gone quiet — this app will keep its own until it is back.");
+    serviceLost = true;
+    renderStats();
+    return false;
+  }
+  const wasLost = serviceLost;
+  serviceLost = false;
+  if (next.clock.tick === world.clock.tick) return true;
+  if (wasLost) {
+    // The service was down and is back: whatever happened to the world while
+    // it was away is an absence like any other.
+    const mark = digestMark(world);
     world = next;
+    const digest = awayDigest(mark, world, { hours: null, because: "service" });
+    if (!digest.empty && digest.ticks > 0) {
+      lastDigest = digest;
+      toast(esc(digestLine(digest)));
+    }
     save();
     renderAll();
-  }, SERVICE_POLL_MS);
+    return true;
+  }
+  world = next;
+  save();
+  renderAll();
+  return true;
+}
+
+function startServicePolling() {
+  if (servicePollTimer) clearInterval(servicePollTimer);
+  servicePollTimer = setInterval(() => { void pollServiceOnce(); }, SERVICE_POLL_MS);
+}
+
+/**
+ * The keeper's own check: look for a world at the configured address right now,
+ * and adopt it if it answers. This is a button, not a background hope — pointing
+ * the app at a hosted world should tell you whether it worked.
+ */
+async function checkServiceNow() {
+  const status = $("service-status");
+  if (status) status.textContent = "Looking for " + (serviceBase() || "a world on this server") + "…";
+  const next = await probeService();
+  if (!next) {
+    serviceLost = true;
+    renderStats();
+    if (status) {
+      status.textContent = serviceBase()
+        ? "Nothing answered at " + serviceBase() + ". This app is keeping its own world."
+        : "No world is being kept on this server. This app is keeping its own world.";
+    }
+    return;
+  }
+  const previouslySeen = digestMark(world);
+  world = next;
+  serviceMode = true;
+  serviceLost = false;
+  mapFx.fxInit = false;
+  const digest = awayDigest(previouslySeen, world, { hours: Math.round((Date.now() - lastSeenAt) / 3.6e5) / 10, because: "service" });
+  if (!digest.empty && digest.ticks > 0) lastDigest = digest;
+  if (servicePollTimer == null) startServicePolling();
+  save();
+  renderAll();
+  loadAdmin();
+  if (status) {
+    status.textContent = "Found it. Day " + world.clock.day + ", tick " + world.clock.tick +
+      ", kept by " + serviceHost() + ". This app is a window onto that world now.";
+  }
+  toast(esc(digest.empty ? "Connected to the world at " + serviceHost() + "." : digestLine(digest)));
 }
 
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       world: serializeWorld(world),
-      settings, chats, chatRoles, ui, keeper, lastSeenAt: Date.now()
+      settings, chats, chatRoles, ui, keeper, lastSeenAt: Date.now(), digest: lastDigest
     }));
   } catch (e) { /* storage full/blocked */ }
 }
@@ -156,6 +227,7 @@ function load() {
       ui = Object.assign(ui, s.ui);
       keeper = normalizeKeeper(s.keeper);
       lastSeenAt = s.lastSeenAt || Date.now();
+      lastDigest = s.digest || null;
       return { fresh: false };
     }
     // Migrate Jeremy's live v1 world — never start him over.
@@ -573,9 +645,12 @@ function renderStats() {
   const badge = $("live-badge");
   const live = awake > 0;
   badge.classList.toggle("paused", !live);
-  badge.innerHTML = '<span class="dot"></span>' + (!live ? "RECOVERING" : hasKey() ? "LIVE" : "SELF-RUNNING");
+  badge.classList.toggle("remote", serviceMode);
+  badge.innerHTML = '<span class="dot"></span>' +
+    (!live ? "RECOVERING" : serviceMode ? "REMOTE" : hasKey() ? "LIVE" : "SELF-RUNNING");
   $("live-note").textContent = !live
     ? "sleeping minds recover and wake on their own"
+    : serviceMode ? "kept by " + serviceHost()
     : hasKey() ? (settings.model || "model") : "the engine writes it";
 }
 function renderProject() {
@@ -1044,6 +1119,27 @@ function renderRecord() {
     return;
   }
   if (ui.record === "chronicle") {
+    // "While you were away" first: it is the only page in the record written
+    // for the keeper's own absence, and it should be read before the days it
+    // summarizes.
+    if (lastDigest && !lastDigest.empty) {
+      const span = lastDigest.days > 0
+        ? lastDigest.days + " day" + (lastDigest.days === 1 ? "" : "s")
+        : lastDigest.ticks + " tick" + (lastDigest.ticks === 1 ? "" : "s");
+      const away = document.createElement("div");
+      away.className = "card away-card";
+      away.innerHTML =
+        '<div class="dhead"><span>While you were away</span><em>' + esc(span) + "</em></div>" +
+        digestLinesHtml(lastDigest) +
+        '<div class="away-meters">' + lastDigest.meters.map(m =>
+          '<span class="away-meter"><b style="color:' + esc(m.color) + '">' + esc(m.label) + "</b> " +
+          Math.round(m.to) + ' <span class="' + (m.delta > 0 ? "up" : m.delta < 0 ? "down" : "") + '">' +
+          (Math.abs(m.delta) < 0.05 ? "·" : (m.delta > 0 ? "+" : "\u2212") + Math.abs(m.delta)) + "</span></span>"
+        ).join("") + "</div>" +
+        (lastDigest.headline ? '<p class="note">The biggest thing: ' + esc(lastDigest.headline.text) + "</p>" : "") +
+        '<button class="btn ghost small digest-dismiss">I have read it</button>';
+      pane.appendChild(away);
+    }
     // The mourning chronicle comes first when there is one: what the world has
     // lost is the part of its history a keeper should not have to go looking
     // for. Burials, the gatherings still coming, and who took up what.
@@ -1139,6 +1235,13 @@ function renderRecord() {
  * stood at the grave, and which of their quarrels is still walking around.
  * @param {HTMLElement} pane
  */
+/** The digest's lines, shared by the away card and any other reader. */
+function digestLinesHtml(digest) {
+  return '<div class="away-lines">' + digest.lines
+    .map(l => '<p class="away-line ' + esc(l.kind) + '">' + esc(l.text) + "</p>")
+    .join("") + "</div>";
+}
+
 function renderMemoriam(pane) {
   const mourning = world.mourning;
   if (!mourning) return;
@@ -3021,6 +3124,14 @@ const SPEEDS = [
 function loadAdmin() {
   $("set-key").value = settings.apiKey || "";
   $("set-model").value = settings.model || "openai/gpt-oss-20b";
+  $("set-service").value = settings.serviceUrl || "";
+  const serviceStatus = $("service-status");
+  if (serviceStatus) {
+    serviceStatus.textContent = serviceMode
+      ? "Watching the world kept by " + serviceHost() + ". It ticks whether or not this app is open."
+      : "This app is keeping its own world — time missed while it was closed is paid back on launch, up to " +
+        CATCHUP_MAX_HOURS + " hours.";
+  }
   $("btn-import-world").disabled = serviceMode;
   $("backup-status").textContent = serviceMode
     ? "The background service owns this world. Download a backup here, but stop the service before restoring one."
@@ -3042,13 +3153,21 @@ function renderSpeeds() {
     });
     row.appendChild(b);
   });
-  $("speed-note").textContent = "Currently one tick every " + (settings.tickSeconds || 45) + " seconds. " +
-    "Half an hour of world time passes each tick, and the world only ticks while the app is open — " +
-    "time missed is paid back on the next launch.";
+  $("speed-note").textContent = serviceMode
+    ? "This app is a window onto a world kept elsewhere, so these settings only matter when it is not."
+    : "Currently one tick every " + (settings.tickSeconds || 45) + " seconds. " +
+      "Half an hour of world time passes each tick, and the world only ticks while the app is open — " +
+      "time missed is paid back on the next launch. Point the app at a world kept elsewhere (below) " +
+      "and it ticks without this app at all.";
 }
 function saveAdmin() {
   settings.apiKey = $("set-key").value.trim();
   settings.model = $("set-model").value.trim() || "openai/gpt-oss-20b";
+  const rawService = $("set-service").value.trim().replace(/\/+$/, "");
+  // Forgiving on purpose: "my-world.up.railway.app" is a reasonable thing to
+  // paste, and https is the only sane default for a host that is not yours.
+  settings.serviceUrl = rawService && !/^https?:\/\//i.test(rawService) ? "https://" + rawService : rawService;
+  $("set-service").value = settings.serviceUrl;
   save(); armTick(); renderAll();
   $("admin-status").textContent = hasKey()
     ? "Saved. " + (settings.model || "The model") + " now writes the world's biggest moments. First tick in ~" +
@@ -3231,25 +3350,48 @@ function catchUp() {
   const ticks = Math.min(missed, CATCHUP_CAP_TICKS, Math.floor((CATCHUP_MAX_HOURS * 3600) / secs));
   if (ticks < 2) return 0;
   const before = world.clock.day;
+  // What the keeper last saw, taken before the world moves under them: the
+  // digest is the difference between those two states and nothing else.
+  const mark = digestMark(world);
   advanceOffline(ticks);
   mapFx.fxInit = false;
-  return { ticks, days: world.clock.day - before, hours: Math.round(hours * 10) / 10 };
+  const digest = awayDigest(mark, world, { hours: Math.round(hours * 10) / 10, because: "offline" });
+  if (!digest.empty) lastDigest = digest;
+  return { ticks, days: world.clock.day - before, hours: Math.round(hours * 10) / 10, digest };
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
-  const serviceWorld = await probeService();
+  // The keeper's own settings first: the world they watch may be kept at an
+  // address only their save knows about.
   const { fresh } = load();
+  const serviceWorld = await probeService();
   initCanvas();
 
   // A brand-new world should not open as an empty map.
   let seeded = 0;
   if (serviceWorld) {
-    // The service has been living this world all along: adopt it as it is.
+    // The service has been living this world all along: adopt it as it is. If
+    // the keeper had a world of their own before this, the gap between the two
+    // is what happened to it while they were gone.
+    const previouslySeen = fresh ? null : digestMark(world);
     world = serviceWorld;
     serviceMode = true;
     serviceLost = false;
     mapFx.fxInit = false;
-    toast("Connected to the background world. It kept going while you were away.");
+    if (previouslySeen && world.clock.tick > previouslySeen.tick) {
+      const digest = awayDigest(previouslySeen, world, {
+        hours: Math.round((Date.now() - lastSeenAt) / 3.6e5) / 10,
+        because: "service"
+      });
+      if (!digest.empty) {
+        lastDigest = digest;
+        toast(esc(digestLine(digest)));
+      } else {
+        toast("Connected to the background world. It kept going while you were away.");
+      }
+    } else {
+      toast("Connected to the background world. It kept going while you were away.");
+    }
   } else if (fresh) {
     const before = world.clock.day;
     runTicks(world, OPENING_TICKS);
@@ -3258,11 +3400,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   } else {
     const caught = catchUp();
     if (caught) {
-      setTimeout(() => {
-        toast("While you were away the world kept going — " + caught.ticks + " ticks, " +
+      const line = caught.digest && !caught.digest.empty
+        ? digestLine(caught.digest)
+        : "While you were away the world kept going — " + caught.ticks + " ticks, " +
           (caught.days > 0 ? caught.days + (caught.days === 1 ? " day" : " days") : caught.hours + " hours") +
-          " of it. Check the Chronicle.");
-      }, 900);
+          " of it. Check the Chronicle.";
+      setTimeout(() => toast(esc(line)), 900);
     }
   }
   // Either way the world has moved, so the save has to catch up with it: a
@@ -3326,6 +3469,14 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
+    const dismissDigest = target?.closest(".digest-dismiss");
+    if (dismissDigest) {
+      lastDigest = null;
+      save();
+      renderRecord();
+      return;
+    }
+
     const memorialMind = target?.closest(".mem-mind");
     if (memorialMind) {
       openSheet(/** @type {any} */ (memorialMind).dataset.mind);
@@ -3375,6 +3526,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("chat-send").addEventListener("click", sendChat);
   $("chat-input").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
   $("btn-save-admin").addEventListener("click", saveAdmin);
+  $("btn-service-check").addEventListener("click", () => { void checkServiceNow(); });
   $("btn-export-world").addEventListener("click", downloadWorldBackup);
   $("btn-import-world").addEventListener("click", () => {
     if (serviceMode) {

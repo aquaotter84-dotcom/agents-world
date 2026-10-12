@@ -1,0 +1,24 @@
+# The whole always-on world, on any box that has Docker:
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# One service, one port, one volume. The volume is the world: everything else in
+# the image can be replaced with a newer one without losing a day of it.
+services:
+  world:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: agents-world
+    restart: unless-stopped
+    ports:
+      - "4321:4321"
+    volumes:
+      - agents-world-data:/data
+    environment:
+      PORT: "4321"
+      # Uncomment both to let a model write the biggest moments (and spend):
+      # BLUESMINDS_API_KEY: "your-key"
+      # AGENTS_WORLD_OFFLINE: "0"
+volumes:
+  agents-world-data:
