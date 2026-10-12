@@ -504,3 +504,24 @@ textarea { resize: vertical; min-height: 56px; }
 .role-row .note { display: block; }
 .rule-card { display: grid; gap: 4px; }
 .rule-card .keeper-note { color: #f3d9a4; }
+
+/* ---- the atlas as a board: tap-hold radial menu ---- */
+#radial-menu { position: absolute; width: 0; height: 0; z-index: 40; pointer-events: none; }
+#radial-menu.hidden { display: none; }
+.radial-item {
+  position: absolute; left: 0; top: 0;
+  min-width: 92px; padding: 9px 12px;
+  margin: -16px 0 0 -46px;
+  border-radius: 999px;
+  border: 1px solid rgba(243,217,164,.42);
+  background: rgba(22,22,32,.94);
+  color: #ece8dd;
+  font: 600 12px/1.2 system-ui;
+  pointer-events: auto;
+  box-shadow: 0 6px 20px rgba(0,0,0,.55);
+  animation: radial-pop .16s ease-out both;
+}
+.radial-item:hover { border-color: rgba(243,217,164,.85); background: rgba(38,34,44,.96); }
+.radial-item.disabled { opacity: .38; border-color: rgba(255,255,255,.14); }
+.radial-label { display: block; text-align: center; }
+@keyframes radial-pop { from { opacity: 0; scale: .82; } to { opacity: 1; scale: 1; } }

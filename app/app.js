@@ -30,7 +30,7 @@ import {
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
   levelProgress, pressingNeed,
   ruleOnPetition, resolveDilemma, actOnWhisper, describeRule, influenceWord,
-  RULE_KINDS, precedentFor
+  RULE_KINDS, precedentFor, feudStage
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -40,6 +40,7 @@ import { migrateV1Save } from "./migrate.js";
 import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply } from "./reply-sanitize.js";
+import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette } from "./board.js";
 
 const STORE_KEY = "agentsworld.v2";
 /**
@@ -1172,6 +1173,8 @@ const mapFx = {
   wisps: [],           // {x0,y0,x1,y1,t0}
   motes: [],           // {x,y,vx,vy,r,ph}
   sprites: new Map(),  // pre-rendered orb glow sprites by color|state|mood
+  sigils: [],          // hit-test cache for petitions, whispers, dilemmas {kind,id,x,y,agentId}
+  constellations: [],  // hit-test cache for secret threads {id,x,y,holders}
   lastFxSeq: 0, fxInit: false,
   running: false
 };
@@ -1487,6 +1490,234 @@ function drawProjectMarker(g, w, h, t) {
   g.restore();
 }
 
+/* ------------------------------------------------------------------ *
+ * The atlas as a board
+ *
+ * The map stops being scenery when it answers questions without you having to
+ * open anything. Four things are drawn here that the engine already knows:
+ * petitions waiting on the keeper, the shape of a feud, the state of the wall,
+ * and the threads that connect people — plus a glyph on each mind so a builder
+ * and a saboteur read differently at a glance.
+ * ------------------------------------------------------------------ */
+
+/** Where a region sits on the board, in canvas pixels. */
+function regionXY(regionId, offsetY) {
+  const region = REGIONS.find(r => r.id === regionId);
+  if (!region) return null;
+  return { x: (region.x / 100) * mapFx.w, y: (region.y / 100) * mapFx.h + (offsetY || 0) };
+}
+
+/**
+ * The wall's palette. As the shared work advances the whole region warms, so
+ * the board itself shows progress rather than a number on top of a picture.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawProjectPalette(g, t) {
+  const project = world.project;
+  const at = regionXY(project.regionId, 0);
+  if (!at) return;
+  const { k, complete: done } = projectPalette(world);
+  const breathe = 0.5 + 0.5 * Math.sin(t * 0.0012);
+  const radius = 46 + k * 54;
+  const grad = g.createRadialGradient(at.x, at.y, 4, at.x, at.y, radius);
+  // Cold slate while it is a hole in the ground; warm gold once it stands.
+  grad.addColorStop(0, "rgba(" + (done ? "255,224,140" : "109,127,156") + "," + (0.10 + k * 0.22 + breathe * 0.03).toFixed(3) + ")");
+  grad.addColorStop(1, "rgba(109,127,156,0)");
+  g.save();
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(at.x, at.y, radius, 0, Math.PI * 2); g.fill();
+  g.restore();
+}
+
+/**
+ * A builder gets a spark; a saboteur gets a red flicker. Both are read straight
+ * off the project ledger, so the glyph cannot disagree with what actually
+ * happened.
+ * @param {CanvasRenderingContext2D} g
+ * @param {any} agent
+ * @param {number} x
+ * @param {number} y
+ * @param {number} t
+ */
+function drawStateGlyph(g, agent, x, y, t) {
+  const glyph = mindGlyph(world, agent);
+  if (!glyph) return;
+  const ph = phaseFor(agent.id);
+  if (glyph === "saboteur") {
+    // A red flicker, deliberately unsteady: something here is going backwards.
+    const flick = 0.45 + 0.55 * Math.abs(Math.sin(t * 0.009 + ph * 3));
+    g.save();
+    g.strokeStyle = "rgba(248,113,113," + flick.toFixed(2) + ")";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(x - 26, y - 14); g.lineTo(x - 21, y - 6);
+    g.moveTo(x - 21, y - 14); g.lineTo(x - 26, y - 6);
+    g.stroke();
+    g.restore();
+    return;
+  }
+  {
+    // A spark orbiting the orb: this mind is one of the ones lifting.
+    const a = t * 0.0022 + ph;
+    const sx = x + Math.cos(a) * 25, sy = y + Math.sin(a) * 12 - 4;
+    const twinkle = 0.5 + 0.5 * Math.sin(t * 0.006 + ph);
+    g.save();
+    g.fillStyle = "rgba(251,191,36," + (0.5 + twinkle * 0.45).toFixed(2) + ")";
+    g.beginPath(); g.arc(sx, sy, 1.6 + twinkle, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
+}
+
+/**
+ * Feud arcs. `drawTies` already draws a frayed red line between people who
+ * dislike each other; this adds the *stage*, so a grudge and a vendetta do not
+ * look like the same weather.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawFeudArcs(g, t) {
+  const living = livingAgents(world);
+  const pos = new Map(living.map(a => [a.id, orbXY(a, t)]));
+  for (const arc of feudArcs(world)) {
+    {
+      const stage = arc.stage;
+      const p1 = pos.get(arc.a), p2 = pos.get(arc.b);
+      if (!p1 || !p2) continue;
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const pulse = stage === "vendetta" ? 0.6 + 0.4 * Math.abs(Math.sin(t * 0.005)) : 0.45;
+      g.save();
+      g.strokeStyle = stage === "vendetta"
+        ? "rgba(220,60,60," + pulse.toFixed(2) + ")"
+        : "rgba(214,120,90," + pulse.toFixed(2) + ")";
+      g.lineWidth = stage === "vendetta" ? 2.4 : 1.6;
+      g.setLineDash(stage === "vendetta" ? [] : [5, 4]);
+      g.beginPath();
+      g.moveTo(p1.x, p1.y);
+      g.quadraticCurveTo(mx, my - 34, p2.x, p2.y);
+      g.stroke();
+      // The stage is named on the board; nobody has to open a dossier to know
+      // how bad it is.
+      g.setLineDash([]);
+      g.fillStyle = stage === "vendetta" ? "rgba(255,150,150,0.9)" : "rgba(226,170,140,0.75)";
+      g.font = "700 8px system-ui";
+      g.textAlign = "center";
+      g.fillText(stage.toUpperCase(), mx, my - 38);
+      g.restore();
+    }
+  }
+}
+
+/**
+ * Sigils for what is waiting on the keeper: a petition where the petitioner is
+ * standing, a whisper at their shoulder, a dilemma between the two parties.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawBoardSigils(g, t) {
+  const charter = world.charter;
+  if (!charter) return;
+  const pos = new Map(livingAgents(world).map(a => [a.id, orbXY(a, t)]));
+  const sigils = boardSigils(world);
+
+  for (const sigil of sigils.filter(s => s.kind === "petition")) {
+    const petition = charter.petitions.find(p => p.id === sigil.id);
+    if (!petition) continue;
+    const at = pos.get(sigil.agentId || "");
+    if (!at) continue;
+    const bob = Math.sin(t * 0.003 + phaseFor(petition.id)) * 3;
+    g.save();
+    g.strokeStyle = petition.kind === "law" ? "rgba(243,217,164,0.9)" : "rgba(170,200,235,0.85)";
+    g.lineWidth = 1.6;
+    g.beginPath();
+    // A scroll for a tradition, a seal for a law: two shapes, no legend needed.
+    if (petition.kind === "law") {
+      g.arc(at.x + 24, at.y - 20 + bob, 6, 0, Math.PI * 2);
+      g.moveTo(at.x + 24, at.y - 26 + bob); g.lineTo(at.x + 24, at.y - 14 + bob);
+      g.moveTo(at.x + 18, at.y - 20 + bob); g.lineTo(at.x + 30, at.y - 20 + bob);
+    } else {
+      g.rect(at.x + 19, at.y - 27 + bob, 11, 14);
+      g.moveTo(at.x + 21.5, at.y - 23 + bob); g.lineTo(at.x + 27.5, at.y - 23 + bob);
+      g.moveTo(at.x + 21.5, at.y - 19 + bob); g.lineTo(at.x + 27.5, at.y - 19 + bob);
+    }
+    g.stroke();
+    g.restore();
+    mapFx.sigils.push({ kind: "petition", id: petition.id, x: at.x + 24, y: at.y - 20 + bob, agentId: petition.agentId });
+  }
+
+  for (const sigil of sigils.filter(s => s.kind === "whisper")) {
+    const whisper = charter.whispers.find(w => w.id === sigil.id);
+    if (!whisper) continue;
+    const at = pos.get(sigil.agentId || "");
+    if (!at) continue;
+    g.save();
+    g.fillStyle = "rgba(196,170,240,0.85)";
+    g.font = "12px system-ui";
+    g.textAlign = "center";
+    g.fillText("\u2731", at.x - 26, at.y + 4 + Math.sin(t * 0.004 + phaseFor(whisper.id)) * 2);
+    g.restore();
+    mapFx.sigils.push({ kind: "whisper", id: whisper.id, x: at.x - 26, y: at.y + 2, agentId: whisper.agentId });
+  }
+
+  for (const sigil of sigils.filter(s => s.kind === "dilemma")) {
+    const dilemma = charter.dilemmas.find(d => d.id === sigil.id);
+    if (!dilemma) continue;
+    const a = pos.get(dilemma.partyIds[0]), b = pos.get(dilemma.partyIds[1]);
+    const at = a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 22 } : (a || b);
+    if (!at) continue;
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(t * 0.004));
+    g.save();
+    g.strokeStyle = "rgba(255,190,120," + pulse.toFixed(2) + ")";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(at.x, at.y - 8); g.lineTo(at.x + 8, at.y + 6); g.lineTo(at.x - 8, at.y + 6);
+    g.closePath();
+    g.stroke();
+    g.fillStyle = "rgba(255,190,120," + pulse.toFixed(2) + ")";
+    g.font = "700 9px system-ui";
+    g.textAlign = "center";
+    g.fillText("!", at.x, at.y + 4);
+    g.restore();
+    mapFx.sigils.push({ kind: "dilemma", id: dilemma.id, x: at.x, y: at.y, agentId: dilemma.partyIds[0] });
+  }
+}
+
+/**
+ * Threads as constellations. A secret still being kept, a pair with real
+ * history, a mind with a long record — each gets a faint mark on the board, and
+ * tapping one opens that thread instead of a dossier.
+ * @param {CanvasRenderingContext2D} g
+ * @param {number} t
+ */
+function drawConstellations(g, t) {
+  const pos = new Map(livingAgents(world).map(a => [a.id, orbXY(a, t)]));
+  for (const thread of constellations(world)) {
+    const secret = world.secrets.find(s => s.id === thread.secretId);
+    if (!secret) continue;
+    const holders = thread.holders.map(id => pos.get(id)).filter(Boolean);
+    if (holders.length < 2) continue;
+    const cx = holders.reduce((s, p) => s + p.x, 0) / holders.length;
+    const cy = holders.reduce((s, p) => s + p.y, 0) / holders.length;
+    g.save();
+    g.strokeStyle = "rgba(150,190,230,0.30)";
+    g.lineWidth = 1;
+    g.setLineDash([2, 3]);
+    for (let i = 0; i < holders.length; i++) {
+      const p = holders[i];
+      g.beginPath();
+      g.moveTo(cx, cy);
+      g.lineTo(p.x, p.y);
+      g.stroke();
+    }
+    g.setLineDash([]);
+    const twinkle = 0.35 + 0.3 * Math.sin(t * 0.0016 + phaseFor(secret.id));
+    g.fillStyle = "rgba(190,215,245," + twinkle.toFixed(2) + ")";
+    g.beginPath(); g.arc(cx, cy, 2.6, 0, Math.PI * 2); g.fill();
+    g.restore();
+    mapFx.constellations.push({ id: secret.id, x: cx, y: cy, holders: holders.length });
+  }
+}
+
 function drawMapFrame(t) {
   const fx = mapFx;
   if (!fx.ctx || !world) return;
@@ -1501,6 +1732,7 @@ function drawMapFrame(t) {
   g.fillRect(0, 0, w, h);
   // This marker is derived from the persisted project state and deliberately
   // drawn above the cached terrain: every milestone survives a map redraw.
+  drawProjectPalette(g, t || 0);
   drawProjectMarker(g, w, h, t || 0);
   // drifting motes
   for (const m of fx.motes) {
@@ -1510,11 +1742,21 @@ function drawMapFrame(t) {
     g.fillStyle = "rgba(220,210,255," + Math.max(0.02, tw).toFixed(3) + ")";
     g.beginPath(); g.arc(m.x * w, m.y * h, m.r, 0, Math.PI * 2); g.fill();
   }
-  // ties under the orbs
+  // ties and feud arcs under the orbs
   drawTies(g, t);
+  fx.constellations.length = 0;
+  drawConstellations(g, t);
+  drawFeudArcs(g, t);
   // orbs
   fx.orbs.length = 0;
-  for (const a of livingAgents(world)) drawOrb(g, a, t, tint.glow);
+  fx.sigils.length = 0;
+  for (const a of livingAgents(world)) {
+    const at = orbXY(a, t);
+    drawStateGlyph(g, a, at.x, at.y, t);
+    drawOrb(g, a, t, tint.glow);
+  }
+  // what is waiting on the keeper, drawn last so it is never buried
+  drawBoardSigils(g, t);
   // ripples
   fx.ripples = fx.ripples.filter(rp => t - rp.t0 < 900);
   for (const rp of fx.ripples) {
@@ -1596,16 +1838,180 @@ function initCanvas() {
   seedMotes();
   sizeCanvas();
   new ResizeObserver(() => sizeCanvas()).observe($("map"));
-  cv.addEventListener("click", ev => {
-    const r = cv.getBoundingClientRect();
-    const x = ev.clientX - r.left, y = ev.clientY - r.top;
+  // A tap opens the dossier. A tap-and-hold anywhere on the board opens the
+  // radial menu, so the keeper's four moves are one gesture from any mind
+  // without ever leaving the map.
+  let holdTimer = 0;
+  let holdFired = false;
+  let startX = 0, startY = 0;
+
+  /** What is under a point on the board: a sigil, a thread, or a mind. */
+  const hitTest = (x, y) => {
+    for (const sig of mapFx.sigils) {
+      if (Math.hypot(sig.x - x, sig.y - y) < 16) return { kind: sig.kind, id: sig.id, agentId: sig.agentId };
+    }
+    for (const con of mapFx.constellations) {
+      if (Math.hypot(con.x - x, con.y - y) < 14) return { kind: "thread", id: con.id };
+    }
     let best = null, bestD = 30;
     for (const o of mapFx.orbs) {
       const d = Math.hypot(o.x - x, o.y - y);
       if (d < bestD) { bestD = d; best = o; }
     }
-    if (best) openSheet(best.id);
+    return best ? { kind: "mind", id: best.id, agentId: best.id } : null;
+  };
+
+  const localXY = ev => {
+    const r = cv.getBoundingClientRect();
+    const p = ev.touches && ev.touches[0] ? ev.touches[0] : ev;
+    return { x: p.clientX - r.left, y: p.clientY - r.top };
+  };
+
+  const begin = ev => {
+    const at = localXY(ev);
+    startX = at.x; startY = at.y;
+    holdFired = false;
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      holdFired = true;
+      openRadial(at.x, at.y, hitTest(at.x, at.y));
+    }, 420);
+  };
+  const cancel = () => { clearTimeout(holdTimer); };
+  const end = ev => {
+    clearTimeout(holdTimer);
+    if (holdFired) { holdFired = false; return; }
+    // A drag is not a tap.
+    const at = localXY(ev.changedTouches && ev.changedTouches[0] ? { clientX: ev.changedTouches[0].clientX, clientY: ev.changedTouches[0].clientY } : ev);
+    if (Math.hypot(at.x - startX, at.y - startY) > 12) return;
+    const hit = hitTest(at.x, at.y);
+    if (!hit) { closeRadial(); return; }
+    if (hit.kind === "mind") openSheet(hit.id);
+    else if (hit.kind === "thread") followThread("secret", hit.id);
+    else if (hit.kind === "petition") { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
+    else if (hit.kind === "dilemma" || hit.kind === "whisper") { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
+  };
+
+  cv.addEventListener("mousedown", begin);
+  cv.addEventListener("mousemove", ev => {
+    if (Math.hypot(localXY(ev).x - startX, localXY(ev).y - startY) > 12) cancel();
   });
+  cv.addEventListener("mouseup", end);
+  cv.addEventListener("mouseleave", cancel);
+  cv.addEventListener("touchstart", begin, { passive: true });
+  cv.addEventListener("touchmove", cancel, { passive: true });
+  cv.addEventListener("touchend", end);
+  cv.addEventListener("touchcancel", cancel);
+  cv.addEventListener("contextmenu", ev => ev.preventDefault());
+  document.addEventListener("click", ev => {
+    const menu = $("radial-menu");
+    if (!menu || menu.classList.contains("hidden")) return;
+    if (/** @type {HTMLElement|null} */ (ev.target)?.closest("#radial-menu")) return;
+    closeRadial();
+  });
+  mapFx.hitTest = hitTest;
+}
+
+/* ------------------------------------------------------------------ *
+ * The radial menu
+ * ------------------------------------------------------------------ */
+
+/**
+ * The four things a keeper can do about a mind, arranged around them.
+ *
+ * Every entry is a real move with a real consequence, not a shortcut to a
+ * screen: whispering puts the mind in a position to tell you something,
+ * answering a petition spends influence and writes precedent. Entries the world
+ * cannot currently honour are shown disabled rather than hidden, so the menu is
+ * also a readout of what is on offer.
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {{kind: string, id: string, agentId?: string}|null} hit
+ */
+function openRadial(x, y, hit) {
+  const menu = $("radial-menu");
+  if (!menu) return;
+  const agent = hit && hit.agentId ? agentById(world, hit.agentId) : null;
+  const charter = world.charter;
+  const openPetition = agent
+    ? (charter ? charter.petitions.find(p => p.agentId === agent.id && p.status === "open") : null)
+    : (charter ? charter.petitions.find(p => p.status === "open") : null);
+  const openWhisper = agent && charter
+    ? charter.whispers.find(w => w.agentId === agent.id && !w.actedOn)
+    : null;
+
+  const items = [
+    {
+      id: "whisper",
+      label: "Whisper",
+      hint: agent
+        ? (openWhisper ? "They have already told you something." : "Draw them aside and listen.")
+        : "Pick a mind first.",
+      disabled: !agent,
+      run: () => {
+        if (!agent) return;
+        openSheet(agent.id);
+        toast(agent.name + " leans in. What they know is theirs until they choose to say it.");
+      }
+    },
+    {
+      id: "petition",
+      label: "Answer petition",
+      hint: openPetition
+        ? describeRule(openPetition.ruleKind) + " — " + (openPetition.cost || 0) + " influence to enact."
+        : "Nothing is waiting on a ruling.",
+      disabled: !openPetition,
+      run: () => { ui.record = "charter"; save(); switchTab("record"); renderRecord(); }
+    },
+    {
+      id: "thread",
+      label: "Follow thread",
+      hint: agent ? "Their part in everything that has happened." : "Pick a mind first.",
+      disabled: !agent,
+      run: () => { if (agent) followThread("mind", agent.id); }
+    },
+    {
+      id: "dossier",
+      label: "Dossier",
+      hint: agent ? "Who they are, and who they are to everyone else." : "Pick a mind first.",
+      disabled: !agent,
+      run: () => { if (agent) openSheet(agent.id); }
+    }
+  ];
+
+  const mapRect = $("map").getBoundingClientRect();
+  const cvRect = mapFx.cv ? mapFx.cv.getBoundingClientRect() : mapRect;
+  // The canvas is positioned inside #map, so convert to map-local coordinates.
+  const ox = cvRect.left - mapRect.left + x;
+  const oy = cvRect.top - mapRect.top + y;
+  const R = 74;
+
+  menu.innerHTML = items.map((item, i) => {
+    const angle = (Math.PI * 2 * i) / items.length - Math.PI / 2;
+    const ix = Math.cos(angle) * R, iy = Math.sin(angle) * R;
+    return '<button class="radial-item' + (item.disabled ? " disabled" : "") + '" data-act="' + esc(item.id) + '" ' +
+      'title="' + esc(item.hint) + '" ' +
+      'style="transform:translate(' + ix.toFixed(1) + "px," + iy.toFixed(1) + 'px)">' +
+      '<span class="radial-label">' + esc(item.label) + "</span></button>";
+  }).join("");
+  menu.style.left = ox + "px";
+  menu.style.top = oy + "px";
+  menu.classList.remove("hidden");
+  mapFx.radial = { items, agent };
+
+  menu.querySelectorAll(".radial-item").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const item = items.find(i => i.id === /** @type {any} */ (btn).dataset.act);
+      closeRadial();
+      if (item && !item.disabled) item.run();
+    });
+  });
+}
+
+function closeRadial() {
+  const menu = $("radial-menu");
+  if (menu) menu.classList.add("hidden");
 }
 
 function driveBar(label, val) {
@@ -1746,6 +2152,7 @@ function cognitionBlock(a) {
 }
 
 function openSheet(id) {
+  closeRadial();
   const a = agentById(world, id);
   if (!a || a.retired) return;
   credit("dossier", id);
@@ -1790,6 +2197,7 @@ function openSheet(id) {
   $("mind-sheet").classList.remove("hidden");
 }
 function closeSheet() {
+  closeRadial();
   $("sheet-backdrop").classList.add("hidden");
   $("mind-sheet").classList.add("hidden");
 }
@@ -2179,6 +2587,7 @@ function followThread(kind, target) {
 }
 
 function switchTab(name) {
+  closeRadial();
   credit("tab", name);
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".screen").forEach(s => s.classList.toggle("active", s.id === "screen-" + name));
