@@ -155,6 +155,9 @@ main { flex: 1; overflow-y: auto; padding: 0 12px 12px; -webkit-overflow-scrolli
 }
 .event .eicon.tappable { cursor: pointer; }
 .event .etext { flex: 1; font-size: 14px; line-height: 1.35; }
+.event .scene { margin: 6px 0 2px; padding: 6px 0 6px 10px; border-left: 2px solid rgba(255,255,255,.12); display: grid; gap: 4px; }
+.event .sline { font-size: 13px; line-height: 1.35; color: #c9c9d6; }
+.event .swho { font-weight: 600; margin-right: 4px; }
 .event .emeta { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .event.error .etext { color: var(--danger); }
 .event .ewho { cursor: pointer; color: var(--muted); }

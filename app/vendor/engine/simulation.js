@@ -173,7 +173,8 @@ function resolveAndApply(world, agent, intent, ranked) {
     agentId: agent.id,
     text: resolution.text,
     significance: resolution.significance,
-    regionId: agent.regionId
+    regionId: agent.regionId,
+    scene: resolution.scene
   });
 }
 

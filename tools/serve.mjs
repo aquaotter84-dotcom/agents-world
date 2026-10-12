@@ -45,8 +45,19 @@ const MIME = {
 
 if (args.sync) await syncVendor();
 
+const SAVE_PATH = process.env.AGENTS_WORLD_SAVE
+  ? resolve(process.env.AGENTS_WORLD_SAVE)
+  : resolve(ROOT, "data", "world.json");
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://" + (req.headers.host ?? "localhost"));
+
+  // The background service (server/index.js) keeps the world moving and writes
+  // it to data/world.json. The app asks here whether that service is running.
+  if (url.pathname === "/api/world" || url.pathname === "/api/status") {
+    return serveService(req, res, url.pathname);
+  }
+
   const target = resolveTarget(url.pathname);
 
   if (!target) {
@@ -89,6 +100,45 @@ function resolveTarget(pathname) {
   const full = resolve(WEB_DIR, rel || "index.html");
   if (full !== WEB_DIR && !full.startsWith(WEB_DIR + sep)) return null;
   return full;
+}
+
+/**
+ * The service's save file, read-only. A missing file means no service has run
+ * here yet, which the app treats as "no background world" rather than an error.
+ * @param {import("node:http").IncomingMessage} req
+ * @param {import("node:http").ServerResponse} res
+ * @param {string} pathname
+ */
+async function serveService(req, res, pathname) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    send(res, 405, "text/plain; charset=utf-8", "Method not allowed");
+    return;
+  }
+  try {
+    const info = await stat(SAVE_PATH);
+    if (pathname === "/api/status") {
+      const saved = JSON.parse(await readFile(SAVE_PATH, "utf8"));
+      const clock = saved.clock || {};
+      send(res, 200, MIME[".json"], JSON.stringify({
+        running: Date.now() - info.mtimeMs < 10 * 60 * 1000,
+        savedAt: info.mtime.toISOString(),
+        tick: clock.tick ?? null,
+        day: clock.day ?? null
+      }));
+      return;
+    }
+    const body = await readFile(SAVE_PATH);
+    res.writeHead(200, {
+      "Content-Type": MIME[".json"],
+      "Content-Length": body.length,
+      "Cache-Control": "no-store"
+    });
+    if (req.method === "HEAD") res.end();
+    else res.end(body);
+  } catch (err) {
+    const missing = err instanceof Error && "code" in err && err.code === "ENOENT";
+    send(res, missing ? 404 : 500, "text/plain; charset=utf-8", missing ? "No background world yet" : "Server error");
+  }
 }
 
 /**

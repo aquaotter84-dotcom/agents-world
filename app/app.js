@@ -82,6 +82,43 @@ let chats = {};
 let ui = { selectedId: null, chatId: null, record: "feed" };
 let lastSeenAt = Date.now();
 
+/* ---------- the background service ----------
+ * When the runner (server/index.js) is alive it owns the clock: the world keeps
+ * ticking whether or not this app is open. In that case the app is a window
+ * onto the service's world — it adopts the saved world, stops ticking locally
+ * and polls for new ticks. Without a service it runs its own world as before. */
+let serviceMode = false;
+let servicePollTimer = null;
+let serviceLost = false;
+const SERVICE_POLL_MS = 10000;
+
+async function probeService() {
+  try {
+    const r = await fetch("api/world", { cache: "no-store" });
+    if (!r.ok) return null;
+    return deserializeWorld(await r.text());
+  } catch (e) {
+    return null; // no service, or not served over http at all (the APK)
+  }
+}
+
+function startServicePolling() {
+  if (servicePollTimer) clearInterval(servicePollTimer);
+  servicePollTimer = setInterval(async () => {
+    const next = await probeService();
+    if (!next) {
+      if (!serviceLost) toast("The background world has gone quiet — it will catch up when it is back.");
+      serviceLost = true;
+      return;
+    }
+    serviceLost = false;
+    if (next.clock.tick === world.clock.tick) return;
+    world = next;
+    save();
+    renderAll();
+  }, SERVICE_POLL_MS);
+}
+
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
@@ -329,6 +366,10 @@ function advanceOffline(n) {
 }
 
 async function tick(manual) {
+  if (serviceMode) {
+    if (manual) toast("The world is running in the background, on its own clock.");
+    return;
+  }
   if (ticking) return;
   ticking = true;
   try {
@@ -433,6 +474,17 @@ function eventStamp(e) {
     return "tick " + e.tick;
   }
 }
+/* A conversation, shown as the lines the two minds actually said. */
+function sceneHtml(scene) {
+  if (!scene || !scene.length) return "";
+  return '<div class="scene">' + scene.map(line => {
+    const sp = agentById(world, line.speakerId);
+    const who = sp ? sp.name : "?";
+    const color = sp ? sp.color : "#9a9aa8";
+    return '<div class="sline"><span class="swho" style="color:' + esc(color) + '">' + esc(who) +
+      '</span> ' + esc(line.text) + "</div>";
+  }).join("") + "</div>";
+}
 function eventCard(e) {
   const a = e.agentId ? agentById(world, e.agentId) : null;
   const icon = a ? a.icon : "⚡";
@@ -443,7 +495,7 @@ function eventCard(e) {
   div.className = "card event" + (tone ? " tone-" + tone : "");
   div.innerHTML =
     '<div class="eicon' + (a ? " tappable" : "") + '" style="color:' + esc(color) + '">' + esc(icon) + "</div>" +
-    '<div><div class="etext">' + esc(e.text) + "</div>" +
+    '<div><div class="etext">' + esc(e.text) + "</div>" + sceneHtml(e.scene) +
     '<div class="emeta"><span class="ewho">' + esc(name) + "</span> · " + esc(eventStamp(e)) + "</div></div>";
   if (a) {
     const open = () => openSheet(a.id);
@@ -1412,11 +1464,13 @@ function saveAdmin() {
     : "Saved. The world keeps running on its own — no key needed.";
 }
 function advance(ticks) {
+  if (serviceMode) { toast("The background world sets its own pace — it is not ours to fast-forward."); return; }
   advanceOffline(ticks);
   save(); mapFx.fxInit = false; renderAll();
   toast("The world ran " + ticks + " ticks ahead — " + describeClock(world.clock) + ".");
 }
 function resetWorld() {
+  if (serviceMode) { toast("This world is kept by the background service. Stop it and delete data/world.json to start over."); return; }
   if (!confirm("Reset the world? All minds, chats, and events return to the seed state.")) return;
   world = freshWorld();
   chats = {};
@@ -1498,13 +1552,21 @@ function catchUp() {
   return { ticks, days: world.clock.day - before, hours: Math.round(hours * 10) / 10 };
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  const serviceWorld = await probeService();
   const { fresh } = load();
   initCanvas();
 
   // A brand-new world should not open as an empty map.
   let seeded = 0;
-  if (fresh) {
+  if (serviceWorld) {
+    // The service has been living this world all along: adopt it as it is.
+    world = serviceWorld;
+    serviceMode = true;
+    serviceLost = false;
+    mapFx.fxInit = false;
+    toast("Connected to the background world. It kept going while you were away.");
+  } else if (fresh) {
     const before = world.clock.day;
     runTicks(world, OPENING_TICKS);
     settleMoments(world.pending.slice());
@@ -1568,6 +1630,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderAll();
   if (fresh || !welcomedBefore()) showWelcome(seeded > 0);
   armTick();
+  if (serviceMode) startServicePolling();
   // Persist the moment we started looking, so the next launch knows the gap.
   window.addEventListener("beforeunload", save);
   document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });

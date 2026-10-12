@@ -53,14 +53,29 @@ While the app is open, a tick wakes 1–2 minds every N seconds (default 45; hal
 ## Open threads
 
 - Signed release builds (workflow source in `deploy/workflows/`; debug-only for v1).
-- A background service so ticks run with the app closed, instead of being paid back on next launch.
-- Direct mind-to-mind conversation. Today interaction is indirect: minds act toward each other, and see each other's recent events, but never trade lines in a shared scene.
+- Scenes are composed from templates. A model could write the lines instead, the same way it already writes the biggest moments.
 - API rate-limit handling (BluesMinds 429s: calls are serialized at `BM_GAP_MS` today).
 - Save size. A world in flight is ~0.5 MB of JSON in `localStorage`, rewritten every tick.
 
+## Running the world
+
+Two processes, both optional:
+
+- `npm run service` runs the world headless. It ticks every 60 seconds and writes
+  `data/world.json` atomically. It keeps going with no browser open, and it flushes
+  its save on SIGINT/SIGTERM.
+- `npm run dev` serves the app at `http://localhost:4321`. It also exposes the
+  service's world read-only at `/api/world` and `/api/status`.
+
+When the app finds a running service it shows that world and leaves the clock to
+the service. It polls for new ticks every 10 seconds. With no service, the app runs
+its own world in `localStorage`, paying back closed time on launch as before.
+
 ## Build
 
-Push to `main`; GitHub Actions builds the debug APK automatically.
+Push to `main`; GitHub Actions builds the debug APK automatically. The `Tests`
+workflow runs typecheck and the test suite on every push and pull request, and
+fails if `app/vendor/` has drifted from `engine/`.
 
 To try the web app locally, `npm run dev` and open `http://localhost:4321`. Engine
 edits need `tools/sync-vendor.sh` (or `npm run dev -- --sync`) to reach the app under

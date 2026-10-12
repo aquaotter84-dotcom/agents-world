@@ -21,6 +21,7 @@
  * @property {string} [regionId]
  * @property {string} [secretId]
  * @property {boolean} [authored]   True when a model wrote the prose rather than the engine.
+ * @property {{speakerId: string, text: string}[]} [scene]  The lines two minds exchanged, when the event is a conversation.
  */
 
 import { clamp } from "../config.js";
@@ -49,6 +50,7 @@ export function logEvent(world, event) {
     secretId: event.secretId,
     authored: event.authored
   };
+  if (event.scene && event.scene.length) full.scene = event.scene;
   world.events.unshift(full);
   if (world.events.length > world.config.limits.events) {
     world.events.length = world.config.limits.events;
