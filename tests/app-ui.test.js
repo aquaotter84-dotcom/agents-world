@@ -183,7 +183,7 @@ test("the record carries a chronicle and the secrets people are keeping", async 
   try {
     // The opening ticks close at least one day, which is what a chronicle entry needs.
     const tabs = $$(doc, "#record-tabs .rtab");
-    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets"]);
+    assert.deepEqual(tabs.map(t => t.textContent), ["Feed", "Chronicle", "Secrets", "Keeper"]);
 
     tabs.find(t => t.dataset.view === "chronicle").click();
     const days = $$(doc, "#record-pane .day-card");
@@ -309,5 +309,30 @@ test("a conversation shows up in the feed as the lines the two minds said", asyn
     const said = lines.map(l => l.textContent.trim());
     assert.ok(said.some(t => t.includes("this helps")), said.join(" | "));
     assert.ok(said.some(t => t.startsWith(a.name)), "each line is attributed to its speaker");
+  } finally { app.restore(); }
+});
+
+test("the keeper earns rank by what they do, and every mind has a face on screen", async () => {
+  const app = await bootApp();
+  try {
+    const doc = app.document;
+    const strip = doc.getElementById("keeper-strip");
+    assert.ok(strip && strip.textContent.includes("Passerby"), "a new keeper starts as a Passerby");
+    const xpBefore = Number((strip.textContent.match(/(\d+) XP/) || [])[1]);
+
+    // A first visit to a screen is a first-time act: it pays once.
+    const minds = [...doc.querySelectorAll("#record-tabs .rtab")].find(t => t.dataset.view === "keeper");
+    minds.click();
+    const xpAfter = Number((doc.getElementById("keeper-strip").textContent.match(/(\d+) XP/) || [])[1]);
+    assert.ok(xpAfter >= xpBefore, "XP never goes down");
+
+    // The Keeper view lists every achievement, unlocked or not.
+    const panel = doc.querySelector("#record-pane .keeper-panel");
+    assert.ok(panel, "the Keeper view renders");
+    assert.equal(panel.querySelectorAll(".ach").length, 10);
+
+    // Each mind is drawn as a portrait, not an emoji in a circle.
+    const portraits = doc.querySelectorAll("#agents-list .portrait svg");
+    assert.ok(portraits.length >= 9, "every mind in the list has a portrait, got " + portraits.length);
   } finally { app.restore(); }
 });
