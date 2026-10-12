@@ -48,6 +48,10 @@ function runs(ticks) {
       for (let i = 0; i < ticks; i++) {
         step(world);
         for (const moment of [...world.pending]) {
+          if (moment.kind === "cognition") {
+            resolveMoment(world, moment.id, { action: "observe", target: "NONE", plan: "I will look around carefully." });
+            continue;
+          }
           const generated = moment.options.find(o => String(o.id).startsWith("new_goal"));
           const chosen = generated || moment.options[moment.options.length - 1];
           resolveMoment(world, moment.id, { optionId: chosen.id });

@@ -208,9 +208,9 @@ function confrontMoment(world, agent, intent, tick) {
       label: `Say it in front of everyone`,
       tone: "bold",
       ops: [
-        { op: "edge", from: target.id, to: agent.id, deltas: { trust: -18, affinity: -12, resentment: 14 } },
+        { op: "edge", from: target.id, to: agent.id, deltas: { trust: -18, affinity: -12, resentment: 14 }, reason: "being confronted in public" },
         { op: "standing", agent: agent.id, delta: world.config.standing.deedConfrontPublic },
-        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -30, familiarity: 4 } },
+        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -30, familiarity: 4 }, reason: "saying the grievance aloud" },
         { op: "need", agent: agent.id, deltas: { esteem: 12, connection: 6, energy: -6 } },
         { op: "need", agent: target.id, deltas: { esteem: -12 } },
         {
@@ -244,8 +244,8 @@ function confrontMoment(world, agent, intent, tick) {
       label: "Take them aside and say it quietly",
       tone: "measured",
       ops: [
-        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -22, trust: 6, familiarity: 6 } },
-        { op: "edge", from: target.id, to: agent.id, deltas: { trust: 4, affinity: 2 } },
+        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -22, trust: 6, familiarity: 6 }, reason: "a quiet confrontation" },
+        { op: "edge", from: target.id, to: agent.id, deltas: { trust: 4, affinity: 2 }, reason: "a quiet confrontation" },
         { op: "need", agent: agent.id, deltas: { esteem: 5, connection: 10, energy: -4 } },
         {
           op: "memory",
@@ -277,7 +277,7 @@ function confrontMoment(world, agent, intent, tick) {
       label: "Decide it isn't worth carrying",
       tone: "graceful",
       ops: [
-        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -34, fear: -6 } },
+        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: -34, fear: -6 }, reason: "letting the grievance go" },
         { op: "need", agent: agent.id, deltas: { meaning: 8, esteem: 6, energy: 4 } },
         { op: "mood", agent: agent.id, value: "steady", durationTicks: 20, reason: "let something go" },
         {
@@ -299,7 +299,7 @@ function confrontMoment(world, agent, intent, tick) {
       label: "Say nothing, and let it fester",
       tone: "dark",
       ops: [
-        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: 16, trust: -10 } },
+        { op: "edge", from: agent.id, to: target.id, deltas: { resentment: 16, trust: -10 }, reason: "letting the grievance fester" },
         { op: "need", agent: agent.id, deltas: { esteem: -8, meaning: -6, connection: -5 } },
         { op: "mood", agent: agent.id, value: "bitter", durationTicks: 30, reason: "swallowed it again" },
         {
@@ -388,6 +388,7 @@ function confideMoment(world, agent, intent, tick) {
   const ctx = contextFor(world, agent, target.id);
   ctx.secretText = secret.text;
   ctx.secretKind = secret.kind;
+  ctx.secretId = secret.id;
 
   const options = [
     {
@@ -487,6 +488,7 @@ function betrayMoment(world, agent, intent, tick) {
   const ctx = contextFor(world, agent, subject.id);
   ctx.secretText = secret.text;
   ctx.secretKind = secret.kind;
+  ctx.secretId = secret.id;
   ctx.fidelity = secret.holders[agent.id] ?? 1;
 
   const witnesses = world.agents.filter(a => a.id !== agent.id && a.id !== subject.id && !a.retired);

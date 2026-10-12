@@ -81,6 +81,36 @@ function needPressure(agent, key, config) {
 }
 
 /**
+ * A pilot's own retained priorities gently bias ordinary engine decisions.
+ * This is deliberately lexical and small: a private sentence can tilt policy,
+ * but it cannot override needs, validation or the action's consequences.
+ * @param {import("../model/agent.js").Agent} agent
+ * @param {string} kind
+ * @param {string|null} targetId
+ * @param {import("../model/world.js").World} world
+ */
+function cognitionPriorityBias(agent, kind, targetId, world) {
+  const priorities = agent.cognition?.priorities || [];
+  if (!priorities.length) return 0;
+  const text = priorities.slice(0, world.config.cognition.maxPriorities)
+    .map(item => item.text.toLowerCase()).join(" ");
+  let bias = 0;
+  if (/wall|build|repair|reinforce|project|stone/.test(text)) {
+    if (kind.startsWith("project_")) bias += 12;
+    if (kind === "pursue_goal") bias += 3;
+  }
+  if (/rest|recover|health|safe|sleep/.test(text) && kind === "rest") bias += 10;
+  if (/friend|company|trust|lonely|belong|together/.test(text) &&
+      ["seek_company", "forge_bond", "project_help", "grant_favour"].includes(kind)) bias += 7;
+  if (/explore|map|learn|discover|unknown/.test(text) && kind === "explore") bias += 8;
+  if (/secret|gossip|truth|rumou?r/.test(text) && kind === "gossip") bias += 7;
+  const target = targetId ? world.agents.find(other => other.id === targetId) : null;
+  if (target && text.includes(target.name.toLowerCase()) &&
+      ["seek_company", "forge_bond", "grant_favour", "project_help"].includes(kind)) bias += 5;
+  return Math.min(16, bias);
+}
+
+/**
  * Generate and rank every action a mind might take right now.
  * @param {import("../model/world.js").World} world
  * @param {import("../model/agent.js").Agent} agent
@@ -126,7 +156,7 @@ export function generateIntents(world, agent) {
     out.push({
       kind,
       targetId,
-      utility: clamp(raw + jitter, 0, 140),
+      utility: clamp(raw + jitter + cognitionPriorityBias(agent, kind, targetId, world), 0, 140),
       requiresProximity: extra?.requiresProximity ?? false,
       reasons,
       payload: extra?.payload
@@ -425,6 +455,65 @@ export function generateIntents(world, agent) {
           requiresProximity: false,
           payload: { secretId: secret.id }
         });
+      }
+    }
+  }
+
+  /* ---------- Shared project: the North Wall ---------- */
+  {
+    const project = world.project;
+    if (project && project.status === "active") {
+      const matchingGoal = agent.goal.kind === "build" || agent.goal.kind === "protect" ||
+        /north wall|wall|repair|reinforce|build/i.test(agent.goal.text);
+      const reasons = [];
+      let score = 13 + agent.drives.focus * 0.08 + agent.drives.creativity * 0.06;
+      if (agent.class === "Maker") score += 9;
+      if (agent.class === "Warden") score += 5;
+      if (matchingGoal) {
+        score += 18;
+        reasons.push("this work serves a priority of theirs");
+      }
+      if (agent.regionId === project.regionId) {
+        score += 7;
+        reasons.push("already at the North Wall");
+      } else {
+        score -= 5;
+        reasons.push("the wall is worth the walk");
+      }
+      add("project_contribute", null, score, reasons.length ? reasons : ["the wall needs work"], {});
+
+      /** @type {{other: import("../model/agent.js").Agent, record: {work: number, help: number, interference: number, lastTick: number, lastInterferenceTick?: number}}[]} */
+      const builders = [];
+      for (const [id, record] of Object.entries(project.contributors)) {
+        const other = byId.get(id);
+        if (!other || other.retired || id === agent.id || (record.work <= 0 && record.help <= 0)) continue;
+        builders.push({ other, record });
+      }
+      builders.sort((a, b) => (b.record.work + b.record.help) - (a.record.work + a.record.help));
+      if (builders.length) {
+        const other = builders[0].other;
+        const edge = edgeToward(agent, other.id);
+        let helpScore = 11 + agent.drives.social * 0.11 + agent.drives.focus * 0.04;
+        if (agent.regionId === project.regionId) helpScore += 7;
+        if (edge.affinity > 20) helpScore += 6;
+        add("project_help", other.id, helpScore, [`could help ${other.name} finish the wall`], {});
+      }
+
+      const cooldown = cfg.projects.interferenceCooldownTicks;
+      const ownWork = project.contributors[agent.id];
+      const mayInterfere = project.progress > 0 &&
+        tick - (ownWork?.lastInterferenceTick ?? -9999) >= cooldown;
+      if (mayInterfere) {
+        const rivalBuilders = builders
+          .map(x => ({ other: x.other, edge: edgeToward(agent, x.other.id) }))
+          .filter(x => x.edge.resentment >= cfg.projects.interferenceResentmentFloor)
+          .sort((a, b) => b.edge.resentment - a.edge.resentment);
+        const rivalBuilder = rivalBuilders[0];
+        if (rivalBuilder) {
+          const reasons = [`resentful of ${rivalBuilder.other.name}'s influence over the work`];
+          const interfereScore = 8 + rivalBuilder.edge.resentment * 0.55 + agent.drives.courage * 0.05;
+          add("project_interfere", rivalBuilder.other.id, interfereScore, reasons, {});
+        }
       }
     }
   }

@@ -38,6 +38,208 @@ function normalizeClaim(text) {
 }
 
 /**
+ * Write a compact, directed account of a material relationship change. This is
+ * opt-in per effect: routine passive drift does not flood the public timeline.
+ * @param {import("../model/world.js").World} world
+ * @param {import("../model/agent.js").Agent} from
+ * @param {import("../model/agent.js").Agent} to
+ * @param {Record<string, number>} before
+ * @param {Record<string, number>} deltas
+ * @param {string} reason
+ * @param {number} tick
+ */
+function logRelationshipChange(world, from, to, before, deltas, reason, tick) {
+  const edge = edgeToward(from, to.id);
+  const labels = {
+    affinity: "affection", trust: "trust", fear: "fear", resentment: "resentment",
+    familiarity: "familiarity", debts: "debt"
+  };
+  const changes = Object.entries(labels).flatMap(([axis, label]) => {
+    const delta = deltas[axis] || 0;
+    const oldValue = before[axis] ?? 0;
+    const newValue = edge[/** @type {keyof typeof edge} */ (axis)];
+    return Math.abs(delta) >= 0.5 && typeof newValue === "number" && oldValue !== newValue
+      ? [{ axis: label, before: oldValue, after: newValue }]
+      : [];
+  });
+  if (!changes.some(change => Math.abs(change.after - change.before) >= 3)) return null;
+  const detail = changes.map(change => `${change.axis} ${Math.round(change.before)} → ${Math.round(change.after)}`).join(", ");
+  return logEvent(world, {
+    kind: "relationship",
+    agentId: from.id,
+    subjectId: to.id,
+    tick,
+    text: `${from.name}'s view of ${to.name} changed: ${detail}, after ${reason}.`,
+    significance: 0.46,
+    regionId: from.regionId,
+    relationship: { reason, changes }
+  });
+}
+
+/**
+ * Complete the North Wall project. Construction becomes a permanent world
+ * state, while contributors take a shared reputation and relationship reward.
+ * @param {import("../model/world.js").World} world
+ * @param {number} tick
+ */
+function completeNorthWall(world, tick) {
+  const project = world.project;
+  if (!project || project.status === "complete") return;
+  project.status = "complete";
+  project.completedTick = tick;
+  const ids = Object.entries(project.contributors)
+    .filter(([, record]) => record.work > 0 || record.help > 0)
+    .map(([id]) => id)
+    .sort();
+  project.completionContributors = ids;
+
+  for (const id of ids) {
+    const agent = agentById(world, id);
+    if (!agent) continue;
+    const record = project.contributors[id];
+    agent.standing = clamp((agent.standing ?? 0) + (record.work > 0 ? 9 : 6), -100, 100);
+    triumph(agent, tick, world.config.progression.triumphDurationTicks, "helped raise the North Wall");
+    remember(agent.memory, {
+      tick,
+      kind: "goal",
+      text: "I helped raise the North Wall. The place is safer because we did the work together.",
+      subjectId: null,
+      valence: 0.85,
+      salience: 0.95
+    }, world.nextId);
+  }
+
+  // Work done side by side leaves a durable mark on how the builders regard
+  // one another; the project is not just a progress bar with a completion text.
+  for (let i = 0; i < ids.length; i++) {
+    const a = agentById(world, ids[i]);
+    if (!a) continue;
+    for (let j = i + 1; j < ids.length; j++) {
+      const b = agentById(world, ids[j]);
+      if (!b) continue;
+      const aBefore = { ...edgeToward(a, b.id) };
+      const bBefore = { ...edgeToward(b, a.id) };
+      const aDeltas = { affinity: 8, trust: 10, familiarity: 8 };
+      const bDeltas = { affinity: 6, trust: 8, familiarity: 8 };
+      adjustEdge(a, b.id, aDeltas, tick);
+      adjustEdge(b, a.id, bDeltas, tick);
+      logRelationshipChange(world, a, b, aBefore, aDeltas, "they raised the North Wall together", tick);
+      logRelationshipChange(world, b, a, bBefore, bDeltas, "they raised the North Wall together", tick);
+      remember(a.memory, {
+        tick,
+        kind: "goal",
+        text: `We raised the North Wall together. ${b.name} was there when the stones went in.`,
+        subjectId: b.id,
+        valence: 0.75,
+        salience: 0.85
+      }, world.nextId);
+      remember(b.memory, {
+        tick,
+        kind: "goal",
+        text: `We raised the North Wall together. ${a.name} was there when the stones went in.`,
+        subjectId: a.id,
+        valence: 0.7,
+        salience: 0.8
+      }, world.nextId);
+    }
+  }
+}
+
+/** @param {import("../model/world.js").World} world @param {any} op @param {number} tick */
+function applyProjectWork(world, op, tick) {
+  const project = world.project;
+  const actor = agentById(world, op.agent);
+  if (!project || project.status !== "active" || !actor || actor.retired) return null;
+  const amount = clamp(Number(op.amount) || 0, 1, 24);
+  const record = project.contributors[actor.id] || (project.contributors[actor.id] = {
+    work: 0, help: 0, interference: 0, lastTick: tick
+  });
+  if (op.kind === "help") record.help += amount;
+  else record.work += amount;
+  record.lastTick = tick;
+  project.progress = clamp(project.progress + amount, 0, 100);
+
+  for (const milestone of project.milestones) {
+    if (milestone.reached || project.progress < milestone.threshold) continue;
+    milestone.reached = true;
+    milestone.tick = tick;
+    const helpers = Object.keys(project.contributors)
+      .map(id => agentById(world, id))
+      .filter((a) => a !== null);
+    const named = helpers.length > 1
+      ? ` ${helpers.map(a => a.name).slice(0, 4).join(", ")} have worked on it.`
+      : "";
+    logEvent(world, {
+      kind: "project",
+      agentId: actor.id,
+      subjectId: op.targetId || null,
+      text: `${milestone.title}.${named}`,
+      significance: milestone.threshold === 100 ? 0.9 : 0.66,
+      regionId: project.regionId,
+      projectId: project.id
+    });
+    if (milestone.threshold === 100) completeNorthWall(world, tick);
+  }
+  return null;
+}
+
+/** @param {import("../model/world.js").World} world @param {any} op @param {number} tick */
+function applyProjectInterference(world, op, tick) {
+  const project = world.project;
+  const actor = agentById(world, op.agent);
+  if (!project || project.status !== "active" || !actor || actor.retired || project.progress <= 0) return null;
+  const target = agentById(world, op.targetId) || Object.entries(project.contributors)
+    .sort((a, b) => (b[1].work + b[1].help) - (a[1].work + a[1].help))
+    .map(([id]) => agentById(world, id)).find(a => a && a.id !== actor.id);
+  const loss = clamp(Number(op.amount) || 8, 1, 12);
+  project.progress = Math.max(0, project.progress - loss);
+  project.interferenceCount += 1;
+  const record = project.contributors[actor.id] || (project.contributors[actor.id] = {
+    work: 0, help: 0, interference: 0, lastTick: tick
+  });
+  record.interference += 1;
+  record.lastTick = tick;
+  record.lastInterferenceTick = tick;
+
+  if (target) {
+    const actorBefore = { ...edgeToward(actor, target.id) };
+    const targetBefore = { ...edgeToward(target, actor.id) };
+    const actorDeltas = { resentment: 10, trust: -7 };
+    const targetDeltas = { resentment: 6, trust: -5 };
+    adjustEdge(actor, target.id, actorDeltas, tick);
+    adjustEdge(target, actor.id, targetDeltas, tick);
+    logRelationshipChange(world, actor, target, actorBefore, actorDeltas, "the North Wall interference", tick);
+    logRelationshipChange(world, target, actor, targetBefore, targetDeltas, "the North Wall interference", tick);
+    remember(target.memory, {
+      tick,
+      kind: "conflict",
+      text: `${actor.name} damaged the North Wall work I had helped with. I know who set us back.`,
+      subjectId: actor.id,
+      valence: -0.8,
+      salience: 0.9
+    }, world.nextId);
+  }
+  actor.standing = clamp((actor.standing ?? 0) - 3, -100, 100);
+  remember(actor.memory, {
+    tick,
+    kind: "conflict",
+    text: "I set the North Wall work back. The choice may cost me more than it buys.",
+    subjectId: target?.id ?? null,
+    valence: -0.35,
+    salience: 0.7
+  }, world.nextId);
+  return logEvent(world, {
+    kind: "project",
+    agentId: actor.id,
+    subjectId: target?.id ?? null,
+    text: `${actor.name} interfered with the North Wall work, undoing ${loss} points of progress${target ? ` and drawing ${target.name}'s anger` : ""}.`,
+    significance: 0.62,
+    regionId: project.regionId,
+    projectId: project.id
+  });
+}
+
+/**
  * Apply a list of operations to the world.
  * @param {import("../model/world.js").World} world
  * @param {EffectOp[]} ops
@@ -80,8 +282,11 @@ function applyOne(world, op, tick, meta) {
       const to = agentById(world, op.to);
       if (!from || !to) return null;
       // Guarantee symmetry of the contact bookkeeping even when only one side
-      // gets an explicit delta.
+      // gets an explicit delta. Material changes can also be followed in a pair
+      // thread; the caller supplies a cause so routine churn stays out of history.
+      const before = { ...edgeToward(from, to.id) };
       adjustEdge(from, to.id, op.deltas || {}, tick);
+      if (op.reason) logRelationshipChange(world, from, to, before, op.deltas || {}, op.reason, tick);
       if (op.deltas && (op.deltas.familiarity || op.deltas.affinity)) {
         const edge = edgeToward(from, to.id);
         edge.contacts += 1;
@@ -125,8 +330,14 @@ function applyOne(world, op, tick, meta) {
       const giverEdge = edgeToward(giver, receiver.id);
       if (tick - (giverEdge.lastFavourTick ?? -9999) < cfg.createCooldownTicks) return null;
       const amount = clamp(op.amount ?? cfg.amount, 1, 100);
-      adjustEdge(giver, receiver.id, { debts: amount, familiarity: 3, trust: 2, affinity: 4 }, tick);
-      adjustEdge(receiver, giver.id, { debts: -amount, familiarity: 3, trust: 3 }, tick);
+      const giverBefore = { ...giverEdge };
+      const receiverBefore = { ...edgeToward(receiver, giver.id) };
+      const giverDeltas = { debts: amount, familiarity: 3, trust: 2, affinity: 4 };
+      const receiverDeltas = { debts: -amount, familiarity: 3, trust: 3 };
+      adjustEdge(giver, receiver.id, giverDeltas, tick);
+      adjustEdge(receiver, giver.id, receiverDeltas, tick);
+      logRelationshipChange(world, giver, receiver, giverBefore, giverDeltas, "the favour", tick);
+      logRelationshipChange(world, receiver, giver, receiverBefore, receiverDeltas, "the favour", tick);
       edgeToward(giver, receiver.id).lastFavourTick = tick;
       edgeToward(receiver, giver.id).lastFavourTick = tick;
       remember(giver.memory, {
@@ -155,12 +366,19 @@ function applyOne(world, op, tick, meta) {
       const creditor = agentById(world, op.from);
       const debtor = agentById(world, op.to);
       if (!creditor || !debtor) return null;
-      const owed = edgeToward(creditor, debtor.id).debts;
+      const creditorEdge = edgeToward(creditor, debtor.id);
+      const owed = creditorEdge.debts;
       if (owed <= 0) return null;
       const amount = Math.min(owed, clamp(op.amount ?? owed, 0, 100));
       if (amount <= 0) return null;
-      adjustEdge(creditor, debtor.id, { debts: -amount }, tick);
-      adjustEdge(debtor, creditor.id, { debts: amount }, tick);
+      const creditorBefore = { ...creditorEdge };
+      const debtorBefore = { ...edgeToward(debtor, creditor.id) };
+      const creditorDeltas = { debts: -amount };
+      const debtorDeltas = { debts: amount };
+      adjustEdge(creditor, debtor.id, creditorDeltas, tick);
+      adjustEdge(debtor, creditor.id, debtorDeltas, tick);
+      logRelationshipChange(world, creditor, debtor, creditorBefore, creditorDeltas, "the debt being called in", tick);
+      logRelationshipChange(world, debtor, creditor, debtorBefore, debtorDeltas, "the debt being called in", tick);
       edgeToward(creditor, debtor.id).lastCallInTick = tick;
       edgeToward(debtor, creditor.id).lastCallInTick = tick;
       return null;
@@ -218,6 +436,11 @@ function applyOne(world, op, tick, meta) {
     }
 
     case "secret_new": {
+      // The effect interpreter is the shared creation path for hatching,
+      // betrayal and model moments. Check the hard cap here on every op; a
+      // batch may contain several creations and each sees the prior one.
+      if (world.secrets.length >= world.config.limits.secretsInWorld) return null;
+
       // A deed becomes a secret. This is how the world keeps generating new
       // material: without it, the handful of secrets a world starts with all
       // eventually go public and the social system runs out of fuel.
@@ -259,6 +482,7 @@ function applyOne(world, op, tick, meta) {
         fidelity: op.fidelity ?? 1,
         originatorId: op.originatorId ?? eligible[0]
       });
+      if (!secret) return null;
       for (const id of eligible.slice(1)) {
         learnSecret(world, secret, id, op.fidelity ?? 1);
       }
@@ -275,7 +499,16 @@ function applyOne(world, op, tick, meta) {
           secretId: secret.id
         }, world.nextId);
       }
-      return null;
+      const originator = agentById(world, op.originatorId) || agentById(world, eligible[0]);
+      return logEvent(world, {
+        kind: "secret",
+        agentId: originator ? originator.id : null,
+        subjectId: about ? about.id : null,
+        text: `A new ${secret.kind} secret began circulating among ${eligible.map(id => agentById(world, id)?.name).filter(Boolean).join(", ")}.`,
+        significance: 0.34,
+        regionId: originator ? originator.regionId : undefined,
+        secretId: secret.id
+      });
     }
 
     case "secret_publish": {
@@ -294,7 +527,16 @@ function applyOne(world, op, tick, meta) {
           secretId: secret.id
         }, world.nextId);
       }
-      return null;
+      const publisher = agentById(world, op.by);
+      return logEvent(world, {
+        kind: "secret",
+        agentId: publisher ? publisher.id : null,
+        subjectId: secret.aboutId,
+        text: `${publisher ? publisher.name + " made it public" : "It became public"}: ${secret.text}`,
+        significance: 0.78,
+        regionId: publisher ? publisher.regionId : undefined,
+        secretId: secret.id
+      });
     }
 
     case "memory": {
@@ -393,6 +635,12 @@ function applyOne(world, op, tick, meta) {
       agent.thoughtAt = Date.now();
       return null;
     }
+
+    case "project_work":
+      return applyProjectWork(world, op, tick);
+
+    case "project_interfere":
+      return applyProjectInterference(world, op, tick);
 
     case "event": {
       const agent = agentById(world, op.agent);

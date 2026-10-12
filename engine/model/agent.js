@@ -41,6 +41,27 @@ import { clamp } from "../config.js";
  */
 
 /**
+ * @typedef {object} CognitionBelief
+ * @property {string} id
+ * @property {string} text
+ * @property {number} confidence
+ * @property {string|null} aboutId
+ * @property {number} tick
+ */
+
+/**
+ * @typedef {object} AgentCognition
+ * @property {boolean} enabled
+ * @property {{text: string, tick: number}[]} priorities
+ * @property {CognitionBelief[]} beliefs
+ * @property {string} memorySummary
+ * @property {number} lastPlanTick
+ * @property {number} nextPlanTick
+ * @property {number} planCount
+ * @property {{tick: number, text: string, action: string, targetId: string|null, accepted: boolean, reason: string, source: string}} [lastPlan]
+ */
+
+/**
  * @typedef {object} Agent
  * @property {string} id
  * @property {string} name
@@ -68,6 +89,7 @@ import { clamp } from "../config.js";
  * @property {number} xp
  * @property {number} level
  * @property {Goal} goal
+ * @property {AgentCognition} cognition  Private, durable cognition for the small pilot cast.
  * @property {Record<string, RelationEdge>} relations
  * @property {Memory} memory
  * @property {number} createdTick
@@ -327,6 +349,25 @@ export function needGain(current, amount) {
 }
 
 /**
+ * A JSON-safe initial cognition record. Pilot status and the first plan offset
+ * are assigned by createWorld; keeper-created minds begin outside the pilot.
+ * @param {boolean} [enabled]
+ * @param {number} [nextPlanTick]
+ * @returns {AgentCognition}
+ */
+export function createCognitionState(enabled = false, nextPlanTick = -1) {
+  return {
+    enabled,
+    priorities: [],
+    beliefs: [],
+    memorySummary: "",
+    lastPlanTick: -1,
+    nextPlanTick,
+    planCount: 0
+  };
+}
+
+/**
  * Build a brand-new agent.
  * @param {object} spec
  * @param {string} spec.id
@@ -381,6 +422,7 @@ export function createAgent(spec, rng, tick, memory, levelDivisor = 45) {
       since: tick,
       priority: 1
     },
+    cognition: createCognitionState(),
     relations: {},
     memory,
     createdTick: tick,

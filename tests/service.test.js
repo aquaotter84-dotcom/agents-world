@@ -10,6 +10,9 @@ import { mkdtemp, readFile, rm, access, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createWorld } from "../engine/model/world.js";
+import { step } from "../engine/simulation.js";
+import { createMomentWorker } from "../server/moment-worker.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,7 +29,7 @@ test("the runner writes a whole, loadable world and leaves no temp file behind",
     });
     const world = JSON.parse(await readFile(save, "utf8"));
     assert.equal(world.clock.tick, 12);
-    assert.equal(world.agents.length, 9);
+    assert.ok(world.agents.length >= 9, "the original cast is saved even if the world has already changed");
     await assert.rejects(access(save + ".tmp"), "the atomic save should not leave a .tmp behind");
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -69,6 +72,51 @@ test("the dev server serves the service's world read-only, and reports when ther
     server.kill();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("ticks continue during a model request and an expired response is discarded", async () => {
+  const world = createWorld({ seed: 819 });
+  world.config.moments.significanceFloor = 0;
+  const first = step(world).moments[0];
+  assert.ok(first, "the test world offers a moment immediately");
+
+  /** @type {((value: string|null) => void)|undefined} */
+  let release;
+  /** @type {string[]} */
+  const lines = [];
+  let resolvedByWorker = 0;
+  const worker = createMomentWorker({
+    world,
+    llm: {
+      available: true,
+      complete: async () => new Promise(resolve => { release = resolve; })
+    },
+    log: (...parts) => lines.push(parts.join(" ")),
+    onResolved: () => { resolvedByWorker += 1; }
+  });
+
+  const request = worker.drain();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(worker.draining, true, "the completion is still pending");
+
+  const tickBefore = world.clock.tick;
+  step(world);
+  assert.equal(world.clock.tick, tickBefore + 1, "a model promise does not hold up the synchronous tick");
+
+  const limit = world.config.moments.maxPendingTicks;
+  while (world.clock.tick - first.tick < limit) step(world);
+  assert.ok(!world.pending.some(moment => moment.id === first.id), "expiry removed the request");
+  assert.ok(world.resolved.some(moment => moment.id === first.id && moment.engineResolved), "the engine took over");
+  const seqAfterExpiry = world.seq;
+
+  worker.stop();
+  assert.ok(release, "the fake request has a completion hook");
+  release("CHOICE: 1\nPROSE: This reply arrived too late.");
+  await request;
+
+  assert.equal(world.seq, seqAfterExpiry, "the late prose creates no second event");
+  assert.equal(resolvedByWorker, 0, "an expired model answer is never applied");
+  assert.ok(lines.some(line => /discarded expired response/.test(line)));
 });
 
 /** @param {() => Promise<boolean>} check */

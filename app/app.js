@@ -382,11 +382,9 @@ async function tick(manual) {
   if (ticking) return;
   ticking = true;
   try {
-    const awake = livingAgents(world).filter(a => a.awake);
-    if (!awake.length) {
-      if (manual) toast("Every mind is asleep. Wake one in Minds.");
-      return;
-    }
+    // Sleeping is a state, not a pause button. The engine still advances the
+    // clock and restores energy, so a collapsed world can wake itself without
+    // the keeper opening a dossier or pressing a button.
     const report = step(world);
     save();
     renderAll();
@@ -478,7 +476,7 @@ const KIND_TONE = {
   feud: "blood",
   secret: "violet", confide: "violet",
   world: "ember", chronicle: "ember",
-  favour: "ember",
+  favour: "ember", project: "gold",
   arrival: "gold", departure: "mist",
   ritual: "violet",
   gossip: "mist", contact: "mist"
@@ -579,8 +577,43 @@ function renderStats() {
   const badge = $("live-badge");
   const live = awake > 0;
   badge.classList.toggle("paused", !live);
-  badge.innerHTML = '<span class="dot"></span>' + (!live ? "IDLE" : hasKey() ? "LIVE" : "SELF-RUNNING");
-  $("live-note").textContent = hasKey() ? (settings.model || "model") : "the engine writes it";
+  badge.innerHTML = '<span class="dot"></span>' + (!live ? "RECOVERING" : hasKey() ? "LIVE" : "SELF-RUNNING");
+  $("live-note").textContent = !live
+    ? "sleeping minds recover and wake on their own"
+    : hasKey() ? (settings.model || "model") : "the engine writes it";
+}
+function renderProject() {
+  const el = $("project-card");
+  if (!el || !world.project) return;
+  const project = world.project;
+  const completed = project.status === "complete";
+  const pct = Math.round(project.progress);
+  const next = project.milestones.find(m => !m.reached);
+  const builders = Object.entries(project.contributors)
+    .map(([id, record]) => ({ agent: agentById(world, id), record }))
+    .filter(row => row.agent && (row.record.work > 0 || row.record.help > 0 || row.record.interference > 0))
+    .sort((a, b) => (b.record.work + b.record.help) - (a.record.work + a.record.help));
+  const milestoneHtml = project.milestones.map(m =>
+    '<span class="' + (m.reached ? "reached" : "") + '">' + (m.reached ? "✓ " : "") + esc(m.title) + "</span>"
+  ).join("");
+  const builderText = builders.length
+    ? builders.slice(0, 6).map(({ agent, record }) => esc(agent.name) +
+      (record.work ? " · " + Math.round(record.work) + " work" : "") +
+      (record.help ? " · " + Math.round(record.help) + " help" : "") +
+      (record.interference ? " · " + record.interference + " interference" : "")
+    ).join(" · ")
+    : "No builders yet. The work begins at the North Wall.";
+  const status = completed ? "Reinforced" : "In progress";
+  const detail = completed
+    ? "Completed on Day " + dayOfTick(project.completedTick) + " · the repaired wall is a lasting landmark."
+    : (next ? "Next milestone: " + next.title + " · " + next.threshold + "%" : "The wall is nearly whole.");
+  el.innerHTML =
+    '<div class="project-head"><span class="project-title">' + esc(project.title) +
+    '</span><span class="project-state">' + status + " · " + pct + "%</span></div>" +
+    '<div class="project-progress"><span style="width:' + pct + '%"></span></div>' +
+    '<div class="project-detail">' + esc(detail) + "</div>" +
+    '<div class="project-milestones">' + milestoneHtml + "</div>" +
+    '<div class="project-builders">' + (completed ? "Raised by " : "At work: ") + builderText + "</div>";
 }
 function renderFeed() {
   const feed = $("activity-feed");
@@ -1031,6 +1064,45 @@ function drawTies(g, t) {
   }
 }
 
+function drawProjectMarker(g, w, h, t) {
+  const project = world && world.project;
+  const region = project && REGIONS.find(r => r.id === project.regionId);
+  if (!project || !region) return;
+  const x = region.x / 100 * w;
+  const y = region.y / 100 * h + 25;
+  const completed = project.status === "complete";
+  const filled = Math.round(project.progress / 20);
+  g.save();
+  g.lineCap = "round";
+  g.lineWidth = completed ? 5 : 4;
+  for (let i = 0; i < 5; i++) {
+    const sx = x - 22 + i * 9;
+    g.strokeStyle = completed
+      ? "rgba(251,191,36,0.95)"
+      : i < filled ? "rgba(251,191,36,0.88)" : "rgba(211,198,170,0.28)";
+    g.beginPath();
+    g.moveTo(sx, y);
+    g.lineTo(sx + 6, y);
+    g.stroke();
+  }
+  g.strokeStyle = completed ? "rgba(255,224,140,0.95)" : "rgba(245,225,184,0.5)";
+  g.lineWidth = 1.4;
+  g.beginPath();
+  g.moveTo(x - 23, y - 4); g.lineTo(x - 23, y + 4);
+  g.moveTo(x + 23, y - 4); g.lineTo(x + 23, y + 4);
+  g.stroke();
+  if (completed) {
+    const glow = 0.6 + Math.sin(t * 0.002) * 0.15;
+    g.fillStyle = "rgba(255,224,140," + glow.toFixed(2) + ")";
+    g.beginPath(); g.arc(x, y - 9, 3, 0, Math.PI * 2); g.fill();
+  }
+  g.fillStyle = completed ? "rgba(255,224,140,0.9)" : "rgba(232,220,196,0.62)";
+  g.font = "700 8px system-ui";
+  g.textAlign = "center";
+  g.fillText(completed ? "REINFORCED" : "WALL " + Math.round(project.progress) + "%", x, y + 15);
+  g.restore();
+}
+
 function drawMapFrame(t) {
   const fx = mapFx;
   if (!fx.ctx || !world) return;
@@ -1043,6 +1115,9 @@ function drawMapFrame(t) {
   const tint = PHASE_TINT[world.clock.phase] || PHASE_TINT.night;
   g.fillStyle = "rgba(" + tint.c + "," + tint.a + ")";
   g.fillRect(0, 0, w, h);
+  // This marker is derived from the persisted project state and deliberately
+  // drawn above the cached terrain: every milestone survives a map redraw.
+  drawProjectMarker(g, w, h, t || 0);
   // drifting motes
   for (const m of fx.motes) {
     m.x = (m.x + m.vx + 1) % 1;
@@ -1250,6 +1325,41 @@ function preoccupationBlock(a) {
     top.map(tr => '<div class="burden">' + esc(String(tr.text || "").slice(0, 180)) + "</div>").join("");
 }
 
+function cognitionBlock(a) {
+  const cognition = a.cognition;
+  if (!cognition || !cognition.enabled) return "";
+  let html = '<section class="cognition-dossier"><span class="sec-tag">Private cognition · pilot</span>';
+  if (cognition.lastPlan) {
+    const plan = cognition.lastPlan;
+    const target = plan.targetId ? agentById(world, plan.targetId) : null;
+    html += '<div class="cognition-plan"><span class="cognition-meta">' +
+      (plan.source === "model" ? "SELF-AUTHORED" : "ENGINE FALLBACK") + " · " +
+      esc(plan.action || "no action") + (target ? " · toward " + esc(target.name) : "") +
+      "</span><p>“" + esc(plan.text) + "”</p>" +
+      (plan.accepted ? "" : '<span class="note">' + esc(plan.reason) + "</span>") + "</div>";
+  } else {
+    html += '<p class="note">No self-authored plan has been recorded yet.</p>';
+  }
+  if (cognition.priorities && cognition.priorities.length) {
+    html += '<span class="cognition-label">Priorities they authored</span><ul>' +
+      cognition.priorities.slice(0, 3).map(item => "<li>" + esc(item.text) + "</li>").join("") + "</ul>";
+  }
+  if (cognition.beliefs && cognition.beliefs.length) {
+    html += '<span class="cognition-label">Private beliefs</span><ul>' +
+      cognition.beliefs.slice(0, 4).map(belief => {
+        const about = belief.aboutId ? agentById(world, belief.aboutId) : null;
+        return "<li>" + esc(belief.text) +
+          (about ? ' <span class="note">about ' + esc(about.name) + "</span>" : "") +
+          ' <span class="belief-confidence">' + Math.round(belief.confidence * 100) + "%</span></li>";
+      }).join("") + "</ul>";
+  }
+  if (cognition.memorySummary) {
+    html += '<span class="cognition-label">Memory summary</span><p class="cognition-summary">' +
+      esc(cognition.memorySummary) + "</p>";
+  }
+  return html + "</section>";
+}
+
 function openSheet(id) {
   const a = agentById(world, id);
   if (!a || a.retired) return;
@@ -1269,8 +1379,12 @@ function openSheet(id) {
   $("sheet-rpg").innerHTML = rpgBlock(a);
   $("sheet-ties").innerHTML = tieRows(a);
   $("sheet-carrying").innerHTML = carryingBlock(a) + preoccupationBlock(a);
+  $("sheet-cognition").innerHTML = cognitionBlock(a);
   const thoughtEl = $("sheet-thought");
-  const fresh = a.thought && (Date.now() - a.thoughtAt < THOUGHT_TTL_MS);
+  const thoughtIsEpoch = a.thoughtAt > 100000000000;
+  const fresh = a.thought && (thoughtIsEpoch
+    ? Date.now() - a.thoughtAt < THOUGHT_TTL_MS
+    : tickNow() - a.thoughtAt < world.config.cognition.planIntervalTicks * 3);
   if (!hasKey()) {
     thoughtEl.innerHTML = '<span class="note">No model attached, so there is no inner monologue to read — ' +
       "but the record will tell you what " + esc(a.name) + " has actually been doing. Add a key in Admin " +
@@ -1610,8 +1724,12 @@ function renderAdminWorld() {
 function renderAll() {
   credit("day", world.clock.day);
   renderKeeperStrip();
-  renderNow(); renderStats(); renderMap(); noteMapFx(); renderFeed();
+  renderNow(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
   renderAgents(); renderAdminWorld();
+  const selected = ui.selectedId ? agentById(world, ui.selectedId) : null;
+  if (selected && !$("mind-sheet").classList.contains("hidden")) {
+    $("sheet-cognition").innerHTML = cognitionBlock(selected);
+  }
   // The record can be hundreds of cards long; there is no reason to rebuild it
   // for a screen nobody is looking at. Opening the tab re-renders on demand.
   if (document.querySelector("#screen-record.active")) renderRecord();

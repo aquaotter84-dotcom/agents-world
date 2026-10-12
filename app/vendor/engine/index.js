@@ -25,7 +25,7 @@ export { createWorld, SEED_CAST, worldStats, agentById, agentByName, regionById,
 export { serializeWorld, deserializeWorld, forkWorld } from "./snapshot.js";
 
 /* ---- advancement ---- */
-export { step, resolveMoment, expireMoments, runTicks, describeWorld, sanitize } from "./simulation.js";
+export { step, resolveMoment, expireMoments, runTicks, describeWorld, sanitize, buildCognitionMoment } from "./simulation.js";
 
 /* ---- model layer ---- */
 export {
@@ -43,7 +43,8 @@ export {
   temperamentOverlap,
   needGain,
   classOf,
-  driveBase
+  driveBase,
+  createCognitionState
 } from "./model/agent.js";
 export { recall, recentTraces, feelingsAbout, memoryStats } from "./model/memory.js";
 export {

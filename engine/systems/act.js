@@ -36,6 +36,9 @@ import { generateIntents } from "../decision/intents.js";
  * @property {string} eventKind
  * @property {number} significance
  * @property {boolean} quiet      True when this shouldn't clutter the public feed.
+ * @property {string} [subjectId] Other mind involved in the action, for thread views.
+ * @property {string} [secretId]  Secret carried by the action, for its thread.
+ * @property {string} [projectId] Shared project carried by the action, for its thread.
  * @property {{speakerId: string, text: string}[]} [scene]  Transcript of a conversation, if one happened.
  */
 
@@ -58,6 +61,9 @@ export function resolveIntent(world, agent, intent, ranked) {
     withdraw: resolveWithdraw,
     forge_bond: resolveForgeBond,
     grant_favour: resolveGrantFavour,
+    project_contribute: resolveProjectContribute,
+    project_help: resolveProjectHelp,
+    project_interfere: resolveProjectInterfere,
     observe: resolveObserve
   };
   const handler = handlers[intent.kind];
@@ -160,8 +166,10 @@ export function socialEncounter(world, agent, other, mode) {
   const ops = [
     { op: "contact", from: agent.id, to: other.id },
     { op: "contact", from: other.id, to: agent.id },
-    { op: "edge", from: agent.id, to: other.id, deltas: { affinity: affinityDelta, familiarity: 9, trust: trustDelta } },
-    { op: "edge", from: other.id, to: agent.id, deltas: { affinity: affinityDelta * 0.85, familiarity: 9, trust: trustDelta * 0.85 } },
+    { op: "edge", from: agent.id, to: other.id, deltas: { affinity: affinityDelta, familiarity: 9, trust: trustDelta },
+      reason: quality > 0.25 ? "a warm meeting" : quality < -0.25 ? "a strained meeting" : "an ordinary meeting" },
+    { op: "edge", from: other.id, to: agent.id, deltas: { affinity: affinityDelta * 0.85, familiarity: 9, trust: trustDelta * 0.85 },
+      reason: quality > 0.25 ? "a warm meeting" : quality < -0.25 ? "a strained meeting" : "an ordinary meeting" },
     { op: "need", agent: agent.id, deltas: { connection: 16 + quality * 6, energy: -4, esteem: quality * 4 } },
     { op: "need", agent: other.id, deltas: { connection: 14 + quality * 5, esteem: quality * 3 } },
     {
@@ -319,8 +327,8 @@ function shareOpinion(world, agent, target, intent) {
 
   /** @type {EffectOp[]} */
   const ops = [
-    { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 4, familiarity: 8, trust: 1 } },
-    { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: telling === "unkind" ? -1 : 2 } },
+    { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 4, familiarity: 8, trust: 1 }, reason: "a private opinion being shared" },
+    { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: telling === "unkind" ? -1 : 2 }, reason: "hearing a private opinion" },
     // The room hears the story before it checks the facts: gossip moves public
     // standing faster than the deeds that earn it.
     ...(telling === "unkind"
@@ -358,7 +366,9 @@ function shareOpinion(world, agent, target, intent) {
   if (telling === "unkind" && listenerLoyalty.affinity > 25) {
     const sting = 4 + listenerLoyalty.affinity / 12;
     /** @type {EffectOp} */
-    const stingOp = { op: "edge", from: target.id, to: agent.id, deltas: { affinity: -sting, trust: -sting * 0.8, resentment: sting * 0.9 } };
+    const stingOp = { op: "edge", from: target.id, to: agent.id,
+      deltas: { affinity: -sting, trust: -sting * 0.8, resentment: sting * 0.9 },
+      reason: `hearing ${agent.name} speak unkindly about a friend` };
     ops.push(stingOp);
     /** @type {EffectOp} */
     const wounded = { op: "need", agent: target.id, deltas: { esteem: -2 } };
@@ -381,7 +391,8 @@ function shareOpinion(world, agent, target, intent) {
     text: `${phrase(world, agent, "gossip", { other: target.name, region: regionName(world, agent.regionId) })} ${opinion}`,
     eventKind: "gossip",
     significance: telling === "unkind" ? 0.35 : 0.2,
-    quiet: telling !== "unkind"
+    quiet: telling !== "unkind",
+    subjectId: target.id
   };
 }
 
@@ -419,8 +430,8 @@ function shareSecret(world, agent, target, secret, cfg) {
     { op: "secret_share", secretId: secret.id, from: agent.id, to: target.id, fidelity,
       memoryText: `${agent.name} told me something about someone. It did not sound certain, but it was interesting.`,
       memoryValence: -0.1, memorySalience: 0.6 },
-    { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 5, familiarity: 8, trust: 2 } },
-    { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: 2 } },
+    { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 5, familiarity: 8, trust: 2 }, reason: "sharing a secret" },
+    { op: "edge", from: target.id, to: agent.id, deltas: { familiarity: 8, affinity: 2 }, reason: "being trusted with a secret" },
     { op: "need", agent: agent.id, deltas: { connection: 12, esteem: 4, energy: -3 } },
     {
       op: "memory",
@@ -462,7 +473,9 @@ function shareSecret(world, agent, target, secret, cfg) {
     text: `${phrase(world, agent, "gossip", { other: target.name, region: regionName(world, agent.regionId) })} ${asTold}`,
     eventKind: "gossip",
     significance: 0.3,
-    quiet: false
+    quiet: false,
+    subjectId: target.id,
+    secretId: secret.id
   };
 }
 
@@ -629,6 +642,103 @@ function travelToward(world, agent, destRegionId, _targetName, flavour) {
     significance: flavour === "explore" ? 0.3 : 0.12,
     quiet: kind !== "explore",
     ...{}
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Shared world project: raise the North Wall
+ * ------------------------------------------------------------------ */
+
+/** @param {World} world @param {Agent} agent */
+function projectSiteResolution(world, agent) {
+  const project = world.project;
+  if (!project || project.status !== "active") return null;
+  if (agent.regionId !== project.regionId) {
+    return travelToward(world, agent, project.regionId, project.title, "project");
+  }
+  return undefined;
+}
+
+/** @param {World} world @param {Agent} agent @param {Intent} intent */
+function resolveProjectContribute(world, agent, intent) {
+  const project = world.project;
+  const site = projectSiteResolution(world, agent);
+  if (site !== undefined) return site || resolveObserve(world, agent, intent);
+  const amount = 11 + agent.drives.focus * 0.045 + agent.drives.creativity * 0.035;
+  return {
+    ops: [
+      { op: "project_work", agent: agent.id, kind: "contribute", amount },
+      { op: "need", agent: agent.id, deltas: { energy: -7, meaning: 6, esteem: 3 } },
+      { op: "memory", agent: agent.id, trace: {
+        kind: "goal", text: `I put in a day's work on ${project.title}.`, subjectId: null, valence: 0.45, salience: 0.55
+      } },
+      { op: "xp", agent: agent.id, amount: 12 }
+    ],
+    text: `${agent.name} set another course of stone into the North Wall.`,
+    eventKind: "project",
+    significance: 0.48,
+    quiet: false
+  };
+}
+
+/** @param {World} world @param {Agent} agent @param {Intent} intent */
+function resolveProjectHelp(world, agent, intent) {
+  const project = world.project;
+  const site = projectSiteResolution(world, agent);
+  if (site !== undefined) return site || resolveObserve(world, agent, intent);
+  const candidates = Object.entries(project.contributors)
+    .filter(([id, record]) => id !== agent.id && (record.work > 0 || record.help > 0))
+    .sort((a, b) => (b[1].work + b[1].help) - (a[1].work + a[1].help));
+  const target = (intent.targetId ? agentById(world, intent.targetId) : null) ||
+    (candidates.length ? agentById(world, candidates[0][0]) : null);
+  if (!target || target.id === agent.id || !project.contributors[target.id]) {
+    return resolveProjectContribute(world, agent, intent);
+  }
+  const amount = 12 + agent.drives.focus * 0.04 + agent.drives.social * 0.04;
+  return {
+    ops: [
+      { op: "project_work", agent: agent.id, kind: "help", targetId: target.id, amount },
+      { op: "edge", from: agent.id, to: target.id, deltas: { affinity: 5, trust: 6, familiarity: 4 }, reason: "working together on the North Wall" },
+      { op: "edge", from: target.id, to: agent.id, deltas: { affinity: 3, trust: 5, familiarity: 4 }, reason: "receiving help on the North Wall" },
+      { op: "need", agent: agent.id, deltas: { energy: -6, meaning: 7, connection: 3 } },
+      { op: "memory", agent: agent.id, trace: {
+        kind: "goal", text: `I helped ${target.name} with the North Wall. We worked well together.`,
+        subjectId: target.id, valence: 0.65, salience: 0.7
+      } },
+      { op: "memory", agent: target.id, trace: {
+        kind: "goal", text: `${agent.name} came to help me with the North Wall.`,
+        subjectId: agent.id, valence: 0.55, salience: 0.65
+      } },
+      { op: "xp", agent: agent.id, amount: 14 }
+    ],
+    text: `${agent.name} helped ${target.name} brace the North Wall's new stonework.`,
+    eventKind: "project",
+    significance: 0.5,
+    quiet: false
+  };
+}
+
+/** @param {World} world @param {Agent} agent @param {Intent} intent */
+function resolveProjectInterfere(world, agent, intent) {
+  const project = world.project;
+  const site = projectSiteResolution(world, agent);
+  if (site !== undefined) return site || resolveObserve(world, agent, intent);
+  if (project.progress <= 0) return resolveProjectContribute(world, agent, intent);
+  const leading = Object.entries(project.contributors)
+    .filter(([id, record]) => id !== agent.id && (record.work > 0 || record.help > 0))
+    .sort((a, b) => (b[1].work + b[1].help) - (a[1].work + a[1].help))[0];
+  const target = (intent.targetId ? agentById(world, intent.targetId) : null) ||
+    (leading ? agentById(world, leading[0]) : null);
+  return {
+    ops: [
+      { op: "project_interfere", agent: agent.id, targetId: target?.id, amount: 8 },
+      { op: "need", agent: agent.id, deltas: { energy: -4, esteem: -3, meaning: -3 } },
+      { op: "xp", agent: agent.id, amount: 6 }
+    ],
+    text: `${agent.name} interfered with the North Wall work.`,
+    eventKind: "project",
+    significance: 0.62,
+    quiet: false
   };
 }
 

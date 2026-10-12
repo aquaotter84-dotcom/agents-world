@@ -14,11 +14,13 @@ import { createClock } from "../clock.js";
 import { createAgent } from "./agent.js";
 import { createMemory, remember } from "./memory.js";
 import { neutralEdge } from "./relationships.js";
+import { createNorthWallProject } from "./projects.js";
 
 /**
  * @typedef {import("./agent.js").Agent} Agent
  * @typedef {import("./memory.js").Memory} Memory
  * @typedef {import("./events.js").WorldEvent} WorldEvent
+ * @typedef {ReturnType<typeof createNorthWallProject>} NorthWallProject
  */
 
 /**
@@ -53,6 +55,11 @@ import { neutralEdge } from "./relationships.js";
  * @property {string} goal
  * @property {number} goalProgress
  * @property {string[]} memories
+ * @property {string} [memorySummary]       Persistent private cognition summary.
+ * @property {string[]} [privateBeliefs]
+ * @property {string[]} [privatePriorities]
+ * @property {{id: string, name: string, region: string, relation: string}[]} [knownMinds]
+ * @property {{title: string, status: string, progress: number, nextMilestone: string}} [project]
  * @property {string} [targetId]
  * @property {string} [targetName]
  * @property {string} [targetPersonality]
@@ -66,6 +73,7 @@ import { neutralEdge } from "./relationships.js";
  * @property {string} [grievance]
  * @property {string} [secretText]
  * @property {string} [secretKind]
+ * @property {string} [secretId]
  * @property {number} [fidelity]
  */
 
@@ -83,7 +91,7 @@ import { neutralEdge } from "./relationships.js";
  * @typedef {object} Moment
  * @property {string} id
  * @property {number} tick
- * @property {string} kind        decision | dialogue | reflection | confrontation | betrayal | confession | declaration
+ * @property {string} kind        decision | dialogue | reflection | confrontation | betrayal | confession | declaration | cognition
  * @property {string} agentId
  * @property {string[]} participants
  * @property {number} significance
@@ -94,6 +102,10 @@ import { neutralEdge } from "./relationships.js";
  * @property {boolean} [resolved]
  * @property {boolean} [engineResolved]  True when the engine decided because no model answered in time.
  * @property {string} [source]    Which system emitted it.
+ * @property {string} [planText]  A pilot mind's recorded self-authored plan.
+ * @property {string} [planAction]
+ * @property {boolean} [planAccepted]
+ * @property {string} [planValidation]
  * @property {MomentOption[]} options
  */
 
@@ -109,6 +121,7 @@ import { neutralEdge } from "./relationships.js";
  * @property {WorldEvent[]} events
  * @property {Record<string, number>} tallies  Lifetime count of every event kind, since the log rolls over.
  * @property {Secret[]} secrets
+ * @property {NorthWallProject} project  Shared, persistent North Wall construction project.
  * @property {Moment[]} pending     Emitted moments awaiting a model answer.
  * @property {Moment[]} resolved    Moments that have been answered and applied.
  * @property {number} seq
@@ -203,6 +216,7 @@ export function createWorld(opts = {}) {
     events: [],
     tallies: {},
     secrets: [],
+    project: createNorthWallProject(),
     pending: [],
     resolved: [],
     seq: 0,
@@ -236,6 +250,12 @@ export function createWorld(opts = {}) {
       memory,
       config.progression.levelDivisor
     );
+    const pilotCount = Math.max(0, Math.floor(config.cognition.pilotCount));
+    if (world.agents.length < pilotCount) {
+      agent.cognition.enabled = true;
+      const interval = Math.max(1, config.cognition.planIntervalTicks);
+      agent.cognition.nextPlanTick = 1 + Math.floor(world.agents.length * interval / Math.max(1, pilotCount));
+    }
     // The first memory every mind has is of arriving.
     remember(memory, {
       tick: 0,
@@ -355,6 +375,7 @@ function seedInitialSecrets(world) {
       fidelity: 1,
       originatorId: holder.id
     });
+    if (!secret) continue;
 
     // A mind keeps its own secret; the model of "who knows" starts closed.
     remember(holder.memory, {
@@ -451,9 +472,12 @@ function clamp100(n) {
  * @param {string} spec.holderId
  * @param {number} [spec.fidelity]
  * @param {string} [spec.originatorId]
- * @returns {Secret}
+ * @returns {Secret|null} Null when the world's hard secret cap is reached.
  */
 export function createSecret(world, spec) {
+  // This public constructor is used during seeding as well as by effects. Keep
+  // the invariant here too, so no caller can bypass the world-wide limit.
+  if (world.secrets.length >= world.config.limits.secretsInWorld) return null;
   /** @type {Secret} */
   const secret = {
     id: world.nextId("s"),

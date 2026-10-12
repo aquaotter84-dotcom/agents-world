@@ -32,7 +32,10 @@ import { settleMemory } from "./systems/memory.js";
 import { settleChat } from "./systems/chat-influence.js";
 import { logEvent } from "./model/events.js";
 import { phrase, momentLine } from "./decision/prose.js";
-import { agentById, livingAgents } from "./model/world.js";
+import { agentById, livingAgents, regionName } from "./model/world.js";
+import { recall } from "./model/memory.js";
+import { describeRelation } from "./model/relationships.js";
+import { standingWord, stateLine } from "./model/agent.js";
 
 /**
  * @typedef {import("./model/world.js").World} World
@@ -67,7 +70,17 @@ export function step(world) {
 
   /* ---- 1. Passive drift ---- */
   for (const agent of living) {
+    const wasAsleep = !agent.awake;
     settleNeeds(world, agent);
+    if (wasAsleep && agent.awake) {
+      logEvent(world, {
+        kind: "world",
+        agentId: agent.id,
+        text: `${agent.name} woke on their own after getting enough rest.`,
+        significance: 0.42,
+        regionId: agent.regionId
+      });
+    }
     settleRelations(world, agent);
     settleMemory(world, agent);
     settleChat(world, agent);
@@ -93,8 +106,16 @@ export function step(world) {
   /* ---- 3. Decisions ---- */
   /** @type {{ agent: Agent, intent: Intent, ranked: Intent[] }[]} */
   const decisions = [];
+  /** @type {{ agent: Agent, moment: Moment }[]} */
+  const planCandidates = [];
   for (const agent of world.rng.shuffle(living)) {
     if (!agent.awake) continue;
+    const cognitionPending = world.pending.some(m => m.kind === "cognition" && m.agentId === agent.id);
+    if (cognitionPending) continue; // no engine-selected intent while their own plan is outstanding
+    if (agent.cognition?.enabled && tick >= agent.cognition.nextPlanTick) {
+      planCandidates.push({ agent, moment: buildCognitionMoment(world, agent) });
+      continue;
+    }
     const ranked = generateIntents(world, agent);
     const intent = ranked[0];
     if (!intent) continue;
@@ -102,12 +123,15 @@ export function step(world) {
   }
 
   /* ---- 4. Moment admission ---- */
-  /** @type {{ agent: Agent, intent: Intent, moment: Moment }[]} */
+  /** @type {{ agent: Agent, intent: Intent|null, ranked: Intent[], moment: Moment }[]} */
   const candidates = [];
   for (const decision of decisions) {
     if (!isMomentWorthy(world, decision.agent, decision.intent, decision.ranked)) continue;
     const moment = buildMoment(world, decision.agent, decision.intent, decision.ranked);
-    if (moment) candidates.push({ agent: decision.agent, intent: decision.intent, moment });
+    if (moment) candidates.push({ agent: decision.agent, intent: decision.intent, ranked: decision.ranked, moment });
+  }
+  for (const candidate of planCandidates) {
+    candidates.push({ agent: candidate.agent, intent: null, ranked: [], moment: candidate.moment });
   }
 
   // The best beats get the model, not the first ones to arrive.
@@ -120,6 +144,10 @@ export function step(world) {
   for (const { agent, moment } of chosen) {
     world.pending.push(moment);
     if (moment.kind === "reflection") agent.lastReflectionTick = tick;
+    if (moment.kind === "cognition") {
+      agent.cognition.lastPlanTick = tick;
+      agent.cognition.nextPlanTick = tick + cfg.cognition.planIntervalTicks;
+    }
   }
 
   /* ---- 5. Everything else resolves now ---- */
@@ -159,13 +187,82 @@ export function step(world) {
 }
 
 /**
+ * Build an open-ended, private cognition request for a pilot mind. No intent has
+ * been selected yet: the model proposes a priority, a plan and an action from a
+ * small validated action grammar. All state-changing consequences remain in the
+ * engine.
+ * @param {World} world
+ * @param {Agent} agent
+ * @returns {Moment}
+ */
+export function buildCognitionMoment(world, agent) {
+  const tick = world.clock.tick;
+  const region = world.regions.find(r => r.id === agent.regionId);
+  const memories = recall(agent.memory, {
+    tick,
+    limit: 6,
+    config: world.config
+  });
+  const knownMinds = livingAgents(world)
+    .filter(other => other.id !== agent.id)
+    .map(other => ({
+      id: other.id,
+      name: other.name,
+      region: regionName(world, other.regionId),
+      relation: agent.relations[other.id] ? describeRelation(agent.relations[other.id]) : "a stranger"
+    }));
+  const nextMilestone = world.project?.milestones.find(m => !m.reached);
+  const cognition = agent.cognition;
+  const context = {
+    agentName: agent.name + (agent.epithet ? " " + agent.epithet : ""),
+    stateLine: stateLine(agent, tick),
+    mood: agent.mood,
+    region: region ? region.name : "an unknown place",
+    regionBlurb: region ? region.blurb : "",
+    phase: world.clock.phase,
+    night: world.clock.phase === "night" || world.clock.phase === "deep night",
+    goal: agent.goal.text,
+    goalProgress: agent.goal.progress,
+    standingWord: standingWord(agent.standing ?? 0),
+    memories: memories.map(memory => memory.text),
+    memorySummary: cognition.memorySummary,
+    privateBeliefs: cognition.beliefs.slice(0, world.config.cognition.maxBeliefs).map(belief =>
+      `${belief.text} (${Math.round(belief.confidence * 100)}% confidence)`
+    ),
+    privatePriorities: cognition.priorities.slice(0, world.config.cognition.maxPriorities).map(priority => priority.text),
+    knownMinds,
+    project: world.project ? {
+      title: world.project.title,
+      status: world.project.status,
+      progress: world.project.progress,
+      nextMilestone: nextMilestone ? nextMilestone.title : "complete"
+    } : undefined
+  };
+  return {
+    id: world.nextId("mo"),
+    tick,
+    kind: "cognition",
+    agentId: agent.id,
+    participants: [agent.id],
+    significance: 0.98,
+    question: "Choose your own next move. Your priority and action have not been selected for you. Propose a brief plan and one action; the world will validate it.",
+    context,
+    options: [],
+    resolved: false,
+    source: "persistent-cognition"
+  };
+}
+
+/**
  * Resolve one intent deterministically and write it into the world.
  * @param {World} world
  * @param {Agent} agent
  * @param {Intent} intent
  * @param {Intent[]} ranked
+ * @returns {WorldEvent[]} Events generated while resolving this action.
  */
 function resolveAndApply(world, agent, intent, ranked) {
+  const seqMark = world.seq;
   const resolution = resolveIntent(world, agent, intent, ranked);
   agent.lastActedTick = world.clock.tick;
   applyEffects(world, resolution.ops, { actorId: agent.id });
@@ -174,7 +271,9 @@ function resolveAndApply(world, agent, intent, ranked) {
   // produces thousands of small acts a day, and a feed that shows all of them
   // shows nothing. Quiet actions still happen and are still remembered — they
   // just don't get a line in the record unless they earn one.
-  if (resolution.quiet && !shouldSurface(world, agent, intent)) return;
+  if (resolution.quiet && !shouldSurface(world, agent, intent)) {
+    return world.events.filter(event => event.seq > seqMark).reverse();
+  }
 
   logEvent(world, {
     kind: resolution.eventKind,
@@ -182,8 +281,12 @@ function resolveAndApply(world, agent, intent, ranked) {
     text: resolution.text,
     significance: resolution.significance,
     regionId: agent.regionId,
+    subjectId: resolution.subjectId,
+    secretId: resolution.secretId,
+    projectId: resolution.projectId || (intent.kind.startsWith("project_") ? world.project?.id : undefined),
     scene: resolution.scene
   });
+  return world.events.filter(event => event.seq > seqMark).reverse();
 }
 
 /**
@@ -223,13 +326,17 @@ export function expireMoments(world) {
     if (tick - moment.tick < limit) return true;
     const agent = agentById(world, moment.agentId);
     if (agent) {
-      const option = chooseDefaultOption(world, agent, moment);
-      applyMomentOption(world, moment, agent, option, null);
-      moment.resolved = true;
-      moment.optionId = option.id;
-      moment.resolution = option.id;
-      moment.engineResolved = true;
-      rememberResolved(world, moment);
+      if (moment.kind === "cognition") {
+        resolveCognitionMoment(world, moment, agent, {}, true);
+      } else {
+        const option = chooseDefaultOption(world, agent, moment);
+        applyMomentOption(world, moment, agent, option, null);
+        moment.resolved = true;
+        moment.optionId = option.id;
+        moment.resolution = option.id;
+        moment.engineResolved = true;
+        rememberResolved(world, moment);
+      }
     }
     expired.push(moment);
     return false;
@@ -260,7 +367,11 @@ function rememberResolved(world, moment) {
  *
  * @param {World} world
  * @param {string} momentId
- * @param {{ optionId?: string, prose?: string, thought?: string, goal?: string, goalKind?: string }} answer
+ * @param {{
+ *   optionId?: string, prose?: string, thought?: string, goal?: string, goalKind?: string,
+ *   action?: string, target?: string, about?: string, plan?: string, priority?: string,
+ *   belief?: string, beliefConfidence?: number, beliefAbout?: string, summary?: string
+ * }} answer
  * @returns {{ ok: boolean, reason?: string, events: WorldEvent[], optionId?: string }}
  */
 export function resolveMoment(world, momentId, answer) {
@@ -272,6 +383,12 @@ export function resolveMoment(world, momentId, answer) {
   if (!agent) {
     world.pending.splice(index, 1);
     return { ok: false, reason: "agent-gone", events: [] };
+  }
+
+  if (moment.kind === "cognition") {
+    const result = resolveCognitionMoment(world, moment, agent, answer, false);
+    world.pending.splice(index, 1);
+    return result;
   }
 
   const option =
@@ -299,6 +416,223 @@ export function resolveMoment(world, momentId, answer) {
   return { ok: true, events, optionId: option.id };
 }
 
+const COGNITION_ACTIONS = new Set([
+  "rest", "observe", "explore", "pursue_goal", "withdraw", "seek_company",
+  "forge_bond", "grant_favour", "gossip", "project_contribute", "project_help", "project_interfere"
+]);
+const COGNITION_TARGET_ACTIONS = new Set([
+  "seek_company", "forge_bond", "grant_favour", "gossip", "project_help", "project_interfere"
+]);
+
+/** @param {unknown} value @param {number} max */
+function privateText(value, max) {
+  const text = sanitize(value).replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  return /^none$/i.test(text) ? "" : text.slice(0, max);
+}
+
+/** @param {unknown} value */
+function cognitionNone(value) {
+  const text = String(value == null ? "" : value).trim();
+  return !text || /^(?:none|no one|n\/a|null)$/i.test(text);
+}
+
+/** @param {World} world @param {unknown} value */
+function findCognitionAgent(world, value) {
+  if (cognitionNone(value)) return null;
+  const needle = String(value).trim();
+  const byId = agentById(world, needle);
+  if (byId && !byId.retired) return byId;
+  return livingAgents(world).find(agent => agent.name.toLowerCase() === needle.toLowerCase()) || null;
+}
+
+/**
+ * Validate an open-ended proposal against a small action grammar. The model
+ * never provides effect ops, numeric deltas or arbitrary targets for secrets.
+ * @param {World} world
+ * @param {Agent} agent
+ * @param {Record<string, any>} answer
+ * @returns {{ok: boolean, reason: string, intent: Intent|null}}
+ */
+function validateCognitionProposal(world, agent, answer) {
+  const action = String(answer.action || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!COGNITION_ACTIONS.has(action)) {
+    return { ok: false, reason: "The proposed action is not in the engine's safe action grammar.", intent: null };
+  }
+
+  const targetText = answer.target;
+  const target = findCognitionAgent(world, targetText);
+  if (COGNITION_TARGET_ACTIONS.has(action) && !target) {
+    return { ok: false, reason: "This action needs a living mind as its target.", intent: null };
+  }
+  if (!COGNITION_TARGET_ACTIONS.has(action) && !cognitionNone(targetText)) {
+    return { ok: false, reason: "This action does not accept a target.", intent: null };
+  }
+  if (target && (target.id === agent.id || target.retired)) {
+    return { ok: false, reason: "The target is not a valid other mind.", intent: null };
+  }
+
+  /** @type {Record<string, any>|undefined} */
+  let payload;
+  if (action === "gossip") {
+    const about = findCognitionAgent(world, answer.about);
+    if (!about || about.id === agent.id || about.id === target?.id) {
+      return { ok: false, reason: "Gossip needs a different living mind to be the subject.", intent: null };
+    }
+    payload = { aboutId: about.id };
+  }
+
+  const project = world.project;
+  if (action.startsWith("project_") && (!project || project.status !== "active")) {
+    return { ok: false, reason: "The North Wall project is not open for work.", intent: null };
+  }
+  if (action === "project_help") {
+    const contribution = target && project.contributors[target.id];
+    if (!contribution || (contribution.work <= 0 && contribution.help <= 0)) {
+      return { ok: false, reason: "There is no current contribution by that mind to help.", intent: null };
+    }
+  }
+  if (action === "project_interfere") {
+    const contribution = target && project.contributors[target.id];
+    const ownContribution = project.contributors[agent.id];
+    const edge = target ? agent.relations[target.id] : null;
+    if (project.progress <= 0 || !contribution || (contribution.work <= 0 && contribution.help <= 0)) {
+      return { ok: false, reason: "There is no wall work by that target to interfere with yet.", intent: null };
+    }
+    if ((edge?.resentment ?? 0) < world.config.projects.interferenceResentmentFloor) {
+      return { ok: false, reason: "The engine will not validate sabotage without a real grievance.", intent: null };
+    }
+    if (world.clock.tick - (ownContribution?.lastInterferenceTick ?? -9999) < world.config.projects.interferenceCooldownTicks) {
+      return { ok: false, reason: "That mind has interfered with this work too recently.", intent: null };
+    }
+  }
+
+  const needsProximity = action === "seek_company" || action === "forge_bond" || action === "grant_favour";
+  return {
+    ok: true,
+    reason: "The engine accepted the proposed action.",
+    intent: {
+      kind: action,
+      targetId: target ? target.id : null,
+      utility: 100,
+      requiresProximity: needsProximity,
+      reasons: ["self-authored plan, validated by the engine"],
+      payload
+    }
+  };
+}
+
+/**
+ * Apply bounded, private cognition updates from a model reply.
+ * @param {World} world
+ * @param {Agent} agent
+ * @param {Record<string, any>} answer
+ */
+function updateCognition(world, agent, answer) {
+  const cognition = agent.cognition;
+  const cfg = world.config.cognition;
+  const priority = privateText(answer.priority, 120);
+  if (priority) {
+    cognition.priorities = cognition.priorities.filter(item => item.text.toLowerCase() !== priority.toLowerCase());
+    cognition.priorities.unshift({ text: priority, tick: world.clock.tick });
+    cognition.priorities = cognition.priorities.slice(0, Math.max(0, cfg.maxPriorities));
+  }
+
+  const beliefText = privateText(answer.belief, 180);
+  if (beliefText) {
+    const beliefAbout = findCognitionAgent(world, answer.beliefAbout);
+    const confidenceValue = Number(answer.beliefConfidence);
+    const confidence = Number.isFinite(confidenceValue) ? Math.max(0, Math.min(1, confidenceValue)) : 0.5;
+    const existing = cognition.beliefs.find(belief => belief.text.toLowerCase() === beliefText.toLowerCase());
+    if (existing) {
+      existing.text = beliefText;
+      existing.confidence = confidence;
+      existing.aboutId = beliefAbout ? beliefAbout.id : null;
+      existing.tick = world.clock.tick;
+    } else {
+      cognition.beliefs.unshift({
+        id: world.nextId("belief"),
+        text: beliefText,
+        confidence,
+        aboutId: beliefAbout ? beliefAbout.id : null,
+        tick: world.clock.tick
+      });
+    }
+    cognition.beliefs = cognition.beliefs.slice(0, Math.max(0, cfg.maxBeliefs));
+  }
+
+  const summary = privateText(answer.summary, cfg.summaryMaxChars);
+  if (summary) cognition.memorySummary = summary;
+  const thought = privateText(answer.thought, 240);
+  if (thought) {
+    agent.thought = thought;
+    agent.thoughtAt = world.clock.tick;
+  }
+}
+
+/**
+ * Resolve a cognition request. Invalid or expired proposals become one
+ * deterministic utility-system action; valid proposals are mapped to existing
+ * engine resolvers, so the model cannot invent their consequences.
+ * @param {World} world
+ * @param {Moment} moment
+ * @param {Agent} agent
+ * @param {Record<string, any>} answer
+ * @param {boolean} engineFallback
+ * @returns {{ok: boolean, reason?: string, events: WorldEvent[], optionId?: string}}
+ */
+function resolveCognitionMoment(world, moment, agent, answer, engineFallback) {
+  updateCognition(world, agent, answer);
+  const plan = privateText(answer.plan, world.config.cognition.planMaxChars);
+  const proposal = validateCognitionProposal(world, agent, answer);
+  let accepted = proposal.ok;
+  let validation = proposal.reason;
+  let intent = proposal.intent;
+  let ranked = intent ? [intent] : [];
+  let usedEngine = engineFallback;
+
+  if (!agent.awake || agent.retired) {
+    accepted = false;
+    intent = null;
+    ranked = [];
+    validation = agent.retired ? "The mind left before acting." : "The mind fell asleep before the plan could be carried out.";
+    usedEngine = true;
+  } else if (!proposal.ok) {
+    ranked = generateIntents(world, agent);
+    intent = ranked[0] || null;
+    usedEngine = true;
+  }
+
+  const events = intent && agent.awake && !agent.retired
+    ? resolveAndApply(world, agent, intent, ranked)
+    : [];
+  const action = intent ? intent.kind : "none";
+  const targetId = intent ? intent.targetId : null;
+  const recordedPlan = plan || (engineFallback
+    ? "No model answer arrived; the engine completed the next move."
+    : "The plan was rejected, so the engine chose a safe next move.");
+
+  agent.cognition.planCount += 1;
+  agent.cognition.lastPlan = {
+    tick: world.clock.tick,
+    text: recordedPlan,
+    action,
+    targetId,
+    accepted,
+    reason: validation,
+    source: accepted ? "model" : "engine"
+  };
+  moment.planText = recordedPlan;
+  moment.planAction = action;
+  moment.planAccepted = accepted;
+  moment.planValidation = validation;
+  moment.optionId = action;
+  moment.resolution = action;
+  moment.engineResolved = usedEngine;
+  moment.resolved = true;
+  rememberResolved(world, moment);
+  return { ok: true, events, optionId: action };
+}
+
 /**
  * @param {World} world
  * @param {Moment} moment
@@ -321,7 +655,8 @@ function applyMomentOption(world, moment, agent, option, prose) {
     text,
     kind: eventKindFor(moment.kind),
     significance: moment.significance,
-    subjectId: moment.participants[1] ?? null
+    subjectId: moment.participants[1] ?? null,
+    secretId: moment.context.secretId
   });
   const result = applyEffects(world, ops, { actorId: agent.id, authored: Boolean(prose) });
   agent.lastActedTick = world.clock.tick;

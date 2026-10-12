@@ -13,13 +13,15 @@
  * @property {string} id
  * @property {number} seq
  * @property {number} tick
- * @property {string} kind        act | contact | conflict | confide | gossip | secret | goal | triumph | level | world | death | betrayal | chronicle
+ * @property {string} kind        act | contact | conflict | confide | gossip | secret | relationship | goal | triumph | level | world | death | betrayal | chronicle
  * @property {string|null} agentId
  * @property {string|null} subjectId
  * @property {string} text
  * @property {number} significance  0..1. Higher means it mattered more.
  * @property {string} [regionId]
  * @property {string} [secretId]
+ * @property {string} [projectId]
+ * @property {{reason: string, changes: {axis: string, before: number, after: number}[]}} [relationship]
  * @property {boolean} [authored]   True when a model wrote the prose rather than the engine.
  * @property {{speakerId: string, text: string}[]} [scene]  The lines two minds exchanged, when the event is a conversation.
  */
@@ -48,6 +50,8 @@ export function logEvent(world, event) {
     significance: clamp(event.significance ?? 0.3, 0, 1),
     regionId: event.regionId,
     secretId: event.secretId,
+    projectId: event.projectId,
+    relationship: event.relationship,
     authored: event.authored
   };
   if (event.scene && event.scene.length) full.scene = event.scene;

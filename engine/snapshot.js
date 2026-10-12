@@ -12,6 +12,8 @@
 import { createRng } from "./rng.js";
 import { makeConfig } from "./config.js";
 import { makeIdFactory } from "./model/world.js";
+import { createNorthWallProject } from "./model/projects.js";
+import { createCognitionState } from "./model/agent.js";
 
 /**
  * The parts of a world worth persisting. Derived data (factions, stats) is
@@ -26,6 +28,7 @@ const PERSISTED = [
   "events",
   "tallies",
   "secrets",
+  "project",
   "pending",
   "resolved",
   "chronicle",
@@ -78,6 +81,28 @@ export function deserializeWorld(input) {
     if (data[key] !== undefined) world[key] = data[key];
   }
   world.config = makeConfig(data.config);
+  // Older v2 worlds predate the shared project; give them the same deterministic
+  // initial project state without drawing from or perturbing the RNG stream.
+  world.project = data.project || createNorthWallProject();
+  const pilotCount = Math.max(0, Math.floor(world.config.cognition.pilotCount));
+  const interval = Math.max(1, world.config.cognition.planIntervalTicks);
+  for (let index = 0; index < world.agents.length; index += 1) {
+    /** @type {import("./model/agent.js").Agent} */
+    const agent = world.agents[index];
+    const saved = agent.cognition;
+    const enabled = saved && typeof saved.enabled === "boolean" ? saved.enabled : index < pilotCount;
+    const offset = 1 + Math.floor(index * interval / Math.max(1, pilotCount));
+    agent.cognition = {
+      ...createCognitionState(enabled, enabled ? offset : -1),
+      ...(saved || {})
+    };
+    if (!Array.isArray(agent.cognition.priorities)) agent.cognition.priorities = [];
+    if (!Array.isArray(agent.cognition.beliefs)) agent.cognition.beliefs = [];
+    if (typeof agent.cognition.memorySummary !== "string") agent.cognition.memorySummary = "";
+    if (!Number.isFinite(agent.cognition.nextPlanTick)) agent.cognition.nextPlanTick = enabled ? offset : -1;
+    if (!Number.isFinite(agent.cognition.lastPlanTick)) agent.cognition.lastPlanTick = -1;
+    if (!Number.isFinite(agent.cognition.planCount)) agent.cognition.planCount = 0;
+  }
   world.rng = rng;
   world.idCounters = counters;
   world.nextId = makeIdFactory(counters);

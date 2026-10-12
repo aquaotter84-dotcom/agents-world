@@ -204,8 +204,13 @@ test("the record carries a chronicle and the secrets people are keeping", async 
 test("a mind's dossier shows who it is to everyone else, not just its stats", async () => {
   const { document: doc, restore } = await bootApp();
   try {
-    const card = $(doc, "#agents-list .agent-card");
-    assert.ok(card, "the Minds tab should list the cast by region");
+    const saved = JSON.parse(doc.defaultView.localStorage.getItem("agentsworld.v2"));
+    const savedWorld = JSON.parse(saved.world);
+    const pilot = savedWorld.agents.find((/** @type {any} */ agent) => agent.cognition && agent.cognition.enabled);
+    assert.ok(pilot, "the world should persist its small cognition pilot");
+    const card = $$(doc, "#agents-list .agent-card").find(element =>
+      element.querySelector(".aname")?.textContent.trim().startsWith(pilot.name));
+    assert.ok(card, "the Minds tab should list the pilot by region");
     card.querySelector(".act-open").click();
 
     const sheet = doc.getElementById("mind-sheet");
@@ -213,6 +218,8 @@ test("a mind's dossier shows who it is to everyone else, not just its stats", as
     assert.ok($$(doc, "#sheet-rpg .bar").length >= 1, "needs and drives are shown");
     assert.ok(text(doc, "sheet-ties").length > 0, "the dossier says how the mind stands with others");
     assert.ok(text(doc, "sheet-carrying").length > 0, "the dossier says what the mind is carrying");
+    assert.match(text(doc, "sheet-cognition"), /Private cognition|SELF-AUTHORED|No self-authored plan/,
+      "the dossier shows a pilot mind's durable plans and private cognition");
     // With no key there is no inner monologue to fetch, and the app must say so
     // rather than sit on "listening…" forever or throw.
     assert.match(text(doc, "sheet-thought"), /no inner monologue|Add a key/i);
@@ -259,6 +266,35 @@ test("nothing in the render path writes to the simulation", async () => {
     assert.ok(edgeCounts.every((/** @type {number} */ n) => n <= before.agents.length - 1),
       "no mind knows more minds than exist");
   } finally { restore(); }
+});
+
+test("an all-asleep app world still advances and lets a mind wake without using the dossier toggle", async () => {
+  const { createWorld, serializeWorld } = await import("../engine/index.js");
+  const sleeping = createWorld({ seed: 409 });
+  for (const agent of sleeping.agents) {
+    agent.awake = false;
+    agent.needs.energy = 70;
+  }
+  const savedState = {
+    world: serializeWorld(sleeping),
+    settings: { tickSeconds: 45 },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+  const app = await bootApp({ savedState });
+  try {
+    assert.match(text(app.document, "live-badge"), /RECOVERING/);
+    const before = JSON.parse(JSON.parse(
+      app.window.localStorage.getItem("agentsworld.v2")
+    ).world).clock.tick;
+    app.document.getElementById("btn-tick").click();
+    await new Promise(r => setTimeout(r, 20));
+    const after = JSON.parse(JSON.parse(
+      app.window.localStorage.getItem("agentsworld.v2")
+    ).world);
+    assert.equal(after.clock.tick, before + 1);
+    assert.ok(after.agents.some((/** @type {any} */ agent) => agent.awake), "one sleeper wakes from engine recovery");
+    assert.match(text(app.document, "live-badge"), /SELF-RUNNING/);
+  } finally { app.restore(); }
 });
 
 test("when the background service is running, the app shows its world and does not tick on its own", async () => {
