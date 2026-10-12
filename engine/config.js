@@ -85,8 +85,16 @@ export const DEFAULT_CONFIG = {
      * world where nobody ever acts on anything.
      */
     rivalryThreshold: 24,
-    /** Mutual affinity above this, from both sides, counts as a faction edge. */
-    factionMutualThreshold: 40
+    /**
+     * Mutual affinity above this, from both sides, counts as a faction edge.
+     *
+     * Set high on purpose. Affinity saturates: a pair who like each other end up
+     * pinned near 100, and a chain of merely-friendly edges then unions the whole
+     * cast into one group of seven. A faction that contains everybody tells you
+     * nothing and looks like a bug on the map. At this threshold the world
+     * resolves into a handful of real camps with unaligned minds between them.
+     */
+    factionMutualThreshold: 58
   },
 
   social: {

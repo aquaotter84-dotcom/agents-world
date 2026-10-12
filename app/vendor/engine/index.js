@@ -21,7 +21,7 @@
  */
 
 /* ---- construction and persistence ---- */
-export { createWorld, SEED_CAST, worldStats, agentById, agentByName, regionById, regionName, livingAgents, agentsIn, regionOccupancy, secretsKnownBy, weaponisableSecrets, secretsAbout, secretTextFor, secretClaimFor } from "./model/world.js";
+export { createWorld, SEED_CAST, worldStats, agentById, agentByName, regionById, regionName, livingAgents, agentsIn, regionOccupancy, secretsKnownBy, privateSecretsHeld, weaponisableSecrets, secretsAbout, secretTextFor, secretClaimFor } from "./model/world.js";
 export { serializeWorld, deserializeWorld, forkWorld } from "./snapshot.js";
 
 /* ---- advancement ---- */
