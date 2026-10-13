@@ -103,7 +103,20 @@ export function normalizeSettings(raw) {
     models,
     baseUrls,
     tickSeconds: Number(s.tickSeconds) || 45,
-    serviceUrl: typeof s.serviceUrl === "string" ? s.serviceUrl : ""
+    serviceUrl: typeof s.serviceUrl === "string" ? s.serviceUrl : "",
+    // Let the world set its own pace: brisk while something is live, easy once
+    // it settles. On by default — it is what makes the clock fit the story —
+    // and off the moment the keeper wants the dial back.
+    director: s.director === undefined ? true : !!s.director,
+    // A chime and a short buzz when the world has a moment. Off by default:
+    // nobody wants an app that makes noise before they have asked it to.
+    sound: !!s.sound,
+    // Let a model write the notable conversations again in the two minds' own
+    // voices. On by default, because it only ever does anything with a key
+    // attached — the engine's own lines are the fallback either way.
+    retell: s.retell === undefined ? true : !!s.retell,
+    // Watch mode: the map, the beats, and nothing to press.
+    watching: !!s.watching
   };
 }
 

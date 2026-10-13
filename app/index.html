@@ -17,17 +17,25 @@
     <div class="tb-right">
       <div id="live-badge"><span class="dot"></span>LIVE</div>
       <p id="live-note">self-running</p>
+      <button id="btn-watch" class="watch-btn" title="Watch mode: the map, the beats and nothing to press" aria-pressed="false">▣ Watch</button>
     </div>
   </header>
 
   <main id="screens">
     <!-- WORLD -->
     <section id="screen-world" class="screen active">
+      <p id="director-note" class="director-note"></p>
+
+      <div id="beat-banner" class="hidden" role="status" aria-live="polite"></div>
+
       <div id="headline-card" class="card">
         <p class="eyebrow" id="headline-eyebrow">Just now</p>
         <p id="headline-text"></p>
         <div id="vitals"></div>
+        <p id="today-line"></p>
       </div>
+
+      <div id="storylines"></div>
 
       <div id="want-card" class="card want-card" role="button" tabindex="0" title="What you are keeping: harmony, prosperity, legacy"></div>
 
@@ -40,6 +48,10 @@
         <div id="map-plate"><span id="map-day">Day 1</span><span id="map-phase">dawn</span></div>
         <button id="btn-create" title="Create a mind">+ Create</button>
         <div id="radial-menu" class="hidden" role="menu" aria-label="What to do about this mind"></div>
+      </div>
+      <div id="timeline-wrap">
+        <div id="timeline"></div>
+        <p id="timeline-note" class="note">The last day, one tick at a time. Tap any of it to watch it again from there.</p>
       </div>
       <p id="map-hint">Tap a mind for its dossier, the crown for your own standing. Tap and hold the board: a mind, to bless it; a region, to set a sign over it; a dilemma, to stand in it.</p>
       <div id="project-card" class="card project-card"></div>
@@ -108,12 +120,30 @@
         <label>Model
           <input id="set-model" type="text" value="gemini-2.5-flash" autocomplete="off">
         </label>
+        <label class="check"><input id="set-retell" type="checkbox"> Let the model rewrite the conversations
+          <span class="note">— the engine's lines stay in the world; this draws better ones over the
+          notable scenes, marked as retold</span>
+        </label>
       </div>
 
       <div class="card form">
         <p class="eyebrow">How fast the world lives</p>
         <div id="speed-row"></div>
         <p class="note" id="speed-note"></p>
+        <label class="check"><input id="set-director" type="checkbox"> Let the world set its own pace
+          <span class="note">— brisk while a feud is live, easy once it settles</span>
+        </label>
+      </div>
+
+      <div class="card form">
+        <p class="eyebrow">Hearing the world</p>
+        <p class="note">A chime and a short buzz when the world has a moment — a betrayal, a wall
+          standing, a confession. Off by default; nothing is downloaded, the tones are made on the device.</p>
+        <label class="check"><input id="set-sound" type="checkbox"> Sound and haptics on a moment
+        </label>
+        <div class="row">
+          <button id="btn-sound-test" class="btn small">Test it</button>
+        </div>
       </div>
 
       <div class="card form">

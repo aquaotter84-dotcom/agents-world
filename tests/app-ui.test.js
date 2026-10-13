@@ -45,9 +45,9 @@ function stubCtx() {
  * its own module registry, because the app keeps its state in module scope.
  */
 /**
- * @param {{ savedState?: any, serviceJson?: string | null }} [opts]
+ * @param {{ savedState?: any, serviceJson?: string | null | (() => string | null), modelReply?: string | ((url: string, body: any) => string) | null }} [opts]
  */
-async function bootApp({ savedState = null, serviceJson = null } = {}) {
+async function bootApp({ savedState = null, serviceJson = null, modelReply = null } = {}) {
   const dom = new JSDOM(html, { url: "http://localhost/" });
   const window = /** @type {any} */ (dom.window);
 
@@ -66,19 +66,19 @@ async function bootApp({ savedState = null, serviceJson = null } = {}) {
 
   // The app arms a repeating tick timer. Capture it so a test can shut the world
   // down; an interval left running would keep the runner alive forever.
-  /** @type {{id: any, kind: string}[]} */
+  /** @type {{id: any, kind: string, ms: number}[]} */
   const timers = [];
   // Captured once, before any override can shadow them.
   const realSetInterval = setInterval;
   const realSetTimeout = setTimeout;
   const fakeSetInterval = (/** @type {any} */ fn, /** @type {number} */ ms) => {
     const id = realSetInterval(fn, ms);
-    timers.push({ id, kind: "interval" });
+    timers.push({ id, kind: "interval", ms: Number(ms) });
     return id;
   };
   const fakeSetTimeout = (/** @type {any} */ fn, /** @type {number|undefined} */ ms, /** @type {any[]} */ ...rest) => {
     const id = realSetTimeout(fn, ms, ...rest);
-    timers.push({ id, kind: "timeout" });
+    timers.push({ id, kind: "timeout", ms: Number(ms) });
     return id;
   };
 
@@ -102,10 +102,25 @@ async function bootApp({ savedState = null, serviceJson = null } = {}) {
     getComputedStyle: window.getComputedStyle,
     // The background service is reached over relative URLs; stub it when a test
     // says one is running, and otherwise make it unreachable, as in the APK.
-    fetch: async (/** @type {string} */ url) => {
+    fetch: async (/** @type {string} */ url, /** @type {any} */ init) => {
       requested.push(String(url));
-      if (serviceJson && String(url).endsWith("api/world")) {
-        return { ok: true, text: async () => serviceJson };
+      const body = init && init.body ? JSON.parse(String(init.body)) : null;
+      // `serviceJson` may be a function when a test needs the served world to
+      // move between polls — which is the whole point of a world kept elsewhere,
+      // and the reason the app must not treat every poll as a new world.
+      const payload = typeof serviceJson === "function" ? serviceJson() : serviceJson;
+      if (payload && String(url).endsWith("api/world")) {
+        return { ok: true, text: async () => payload };
+      }
+      // A stand-in for a provider: whatever a test says the model said.
+      if (modelReply) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ choices: [{ message: {
+            content: typeof modelReply === "function" ? modelReply(String(url), body) : modelReply
+          } }] })
+        };
       }
       throw new TypeError("no service");
     }
@@ -132,7 +147,7 @@ async function bootApp({ savedState = null, serviceJson = null } = {}) {
     }
     dom.window.close();
   };
-  return { window, document: window.document, mod, restore, requested };
+  return { window, document: window.document, mod, restore, requested, timers };
 }
 
 /** @param {any} doc @param {string} id */
@@ -178,6 +193,350 @@ test("a tick with no model still moves the world and narrates it", async () => {
     );
     // Nothing may be left dangling: a keyless world resolves every moment itself.
     assert.match(text(doc, "map-phase"), /dawn|day|dusk|night|deep night/);
+  } finally { restore(); }
+});
+
+test("the world screen shows the story and counts the bookkeeping it left out", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    // A tick of nine minds is mostly the simulation keeping its own books:
+    // opinion deltas between pairs, minds that thought about asking the keeper
+    // for something and did not, moments the model never answered in time. The
+    // World screen is the one screen that has to be worth watching, so those
+    // are counted rather than printed — and the count has to be real.
+    const rows = $$(doc, "#activity-feed .event");
+    assert.ok(rows.length > 0, "the world screen still has a feed");
+    for (const row of rows) {
+      // A row is either one event or a folded run of ambient lines; both are
+      // held to the same rule, which is that the simulation's bookkeeping is
+      // not something that happened.
+      const ambient = row.classList.contains("ambient");
+      const line = (ambient
+        ? row.querySelector(".ambient-body").textContent
+        : row.querySelector(".etext").textContent);
+      assert.doesNotMatch(line, /'s view of .* changed/, "an opinion delta is not an event");
+      assert.doesNotMatch(line, /had nothing in the world to point at/, "a mind who asked for nothing is not an event");
+      assert.doesNotMatch(line, /No answer arrived in time/, "the engine narrating its own fallback is not an event");
+      assert.doesNotMatch(line, /started to tell the keeper something and stopped/, "nor is a mind changing its mind");
+      if (ambient) {
+        assert.ok(row.querySelectorAll(".ambient-line").length >= 2, "a folded row holds a run, not one line");
+        assert.ok(row.querySelectorAll(".ambient-face").length >= 1, "and shows the faces it folded");
+      } else {
+        assert.match(row.className, /tier-(moment|beat|notable|texture)/, "every row carries how much it mattered");
+      }
+    }
+    const quiet = doc.querySelector("#activity-feed .feed-quiet");
+    assert.ok(quiet, "the screen says how much it left out");
+    assert.match(quiet.textContent, /\d+ quieter change/, "the count is a number, not a mood");
+
+    // Nothing is hidden, only moved. The record's Feed is still every line.
+    $$(doc, "#record-tabs .rtab").find(t => t.dataset.view === "feed").click();
+    const all = $$(doc, "#record-pane .event").map(row => row.querySelector(".etext").textContent);
+    assert.ok(all.length > rows.length, "the record holds more than the world screen");
+    assert.ok(
+      all.some(line => /'s view of .* changed/.test(line)),
+      "including the lines the world screen would never say out loud"
+    );
+  } finally { restore(); }
+});
+
+test("a beat takes over the top of the world screen", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    const banner = doc.getElementById("beat-banner");
+    assert.ok(banner.classList.contains("hidden"), "nothing is announced before the world moves");
+    let announced = null;
+    // A beat worth announcing lands on roughly 40% of ticks, so a couple of
+    // world days is overwhelming odds; the loop is bounded either way.
+    for (let i = 0; i < 60 && !announced; i++) {
+      doc.getElementById("btn-tick").click();
+      await new Promise(r => setTimeout(r, 20));
+      if (!banner.classList.contains("hidden")) announced = banner.textContent;
+    }
+    assert.ok(announced, "a day of world time produces something worth announcing");
+    assert.match(banner.className, /tier-(beat|moment)/, "only beat-or-better interrupts, and only when it lands");
+    assert.ok(announced.trim().length > 20, "the announcement says what happened");
+    assert.doesNotMatch(announced, /'s view of .* changed|No answer arrived in time/);
+    banner.click();
+    assert.ok(banner.classList.contains("hidden"), "tapping it dismisses it");
+  } finally { restore(); }
+});
+
+test("the director sets the pace to the story, and the header says so", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const world = createWorld({ seed: 42 });
+  runTicks(world, 240);
+  // A world with a live vendetta is a world worth sitting and watching.
+  const [a, b] = world.agents;
+  /** @type {any} */ (world).flags = { feudStages: { [a.id + "|" + b.id]: "vendetta" } };
+  a.relations[b.id].resentment = 80;
+  b.relations[a.id].resentment = 76;
+  const savedState = {
+    world: serializeWorld(world),
+    settings: { director: true, tickSeconds: 45 },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+
+  const app = await bootApp({ savedState });
+  try {
+    const note = text(app.document, "director-note");
+    assert.match(note, /Brisk/, "a vendetta runs at the fastest pace the director has");
+    assert.match(note, /vendetta/i, "and the header says why");
+    const tick = app.timers.filter(t => t.kind === "interval" && t.ms >= 15000);
+    assert.ok(tick.length >= 1, "the app armed a clock");
+    for (const t of tick) assert.equal(t.ms, 30000, "the clock runs at the pace the world earned");
+  } finally { app.restore(); }
+});
+
+test("with the director off the keeper's own pace is kept, and no pace is claimed", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const world = createWorld({ seed: 42 });
+  runTicks(world, 240);
+  const [a, b] = world.agents;
+  /** @type {any} */ (world).flags = { feudStages: { [a.id + "|" + b.id]: "vendetta" } };
+  a.relations[b.id].resentment = 80;
+  const savedState = {
+    world: serializeWorld(world),
+    settings: { director: false, tickSeconds: 90 },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+
+  const app = await bootApp({ savedState });
+  try {
+    const tick = app.timers.filter(t => t.kind === "interval" && t.ms >= 15000);
+    assert.ok(tick.length >= 1);
+    for (const t of tick) assert.equal(t.ms, 90000, "the keeper's dial is the one that matters");
+    assert.doesNotMatch(text(app.document, "director-note"), /Brisk|Normal|Easy|Chill/);
+  } finally { app.restore(); }
+});
+
+test("the board says what story is running, and a card can be followed", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const world = createWorld({ seed: 42 });
+  runTicks(world, 240);
+  const [a, b] = world.agents;
+  /** @type {any} */ (world).flags = { feudStages: { [a.id + "|" + b.id]: "vendetta" } };
+  a.relations[b.id].resentment = 80;
+  b.relations[a.id].resentment = 76;
+  const savedState = {
+    world: serializeWorld(world),
+    settings: {}, chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+
+  const app = await bootApp({ savedState });
+  try {
+    const doc = app.document;
+    const cards = $$(doc, "#storylines .storyline");
+    assert.ok(cards.length >= 1, "a world at war has something on the board");
+    assert.ok(cards.length <= 3, "three cards, not a list");
+    for (const card of cards) {
+      assert.ok(card.querySelector(".story-title").textContent.trim().length > 0, "a card is titled");
+      assert.ok(card.querySelector(".story-line").textContent.trim().length > 0, "and says something");
+    }
+    const feud = cards.find(c => /vendetta/i.test(c.textContent));
+    assert.ok(feud, "the vendetta is the first thing the board says");
+    const act = feud.querySelector(".story-act");
+    assert.ok(act, "and it can be followed");
+    act.click();
+    assert.ok(doc.querySelector("#screen-record").classList.contains("active"), "following a story opens the record");
+    assert.ok(doc.querySelector('.rtab[data-view="threads"]').classList.contains("active"), "on the thread it points at");
+    assert.match(doc.querySelector("#thread-target").textContent, new RegExp(a.name + "|" + b.name));
+  } finally { app.restore(); }
+});
+
+test("the world screen says what today has done so far", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    const line = text(doc, "today-line");
+    assert.ok(line.length > 10, "there is a line about today");
+    assert.match(line, /^(Today:|Nothing worth telling)/);
+  } finally { restore(); }
+});
+
+test("watch mode is the map, the beats, and no controls", async () => {
+  const { document: doc, restore, window } = await bootApp();
+  try {
+    const btn = doc.getElementById("btn-watch");
+    assert.ok(!doc.body.classList.contains("watching"), "the app opens with its controls");
+    doc.querySelector('.tab[data-tab="admin"]').click();
+    assert.ok(doc.querySelector("#screen-admin").classList.contains("active"));
+    btn.click();
+    assert.ok(doc.body.classList.contains("watching"), "watch mode is a state the whole app wears");
+    assert.ok(doc.querySelector("#screen-world").classList.contains("active"), "and it always shows the world");
+    assert.match(btn.textContent, /Watching/);
+    assert.equal(JSON.parse(window.localStorage.getItem("agentsworld.v2")).settings.watching, true, "and it is remembered");
+    btn.click();
+    assert.ok(!doc.body.classList.contains("watching"), "and it can be left");
+    assert.equal(JSON.parse(window.localStorage.getItem("agentsworld.v2")).settings.watching, false);
+  } finally { restore(); }
+});
+
+test("sound is a switch in Admin, off until it is asked for", async () => {
+  const { document: doc, restore, window } = await bootApp();
+  try {
+    doc.querySelector('.tab[data-tab="admin"]').click();
+    const box = doc.getElementById("set-sound");
+    assert.ok(box, "Admin carries the switch");
+    assert.equal(box.checked, false, "the app is silent until asked");
+    box.checked = true;
+    box.dispatchEvent(new window.Event("change"));
+    assert.equal(JSON.parse(window.localStorage.getItem("agentsworld.v2")).settings.sound, true);
+    // A device with no audio must still survive being told to play something.
+    assert.doesNotThrow(() => doc.getElementById("btn-sound-test").click());
+    box.checked = false;
+    box.dispatchEvent(new window.Event("change"));
+    assert.equal(JSON.parse(window.localStorage.getItem("agentsworld.v2")).settings.sound, false);
+  } finally { restore(); }
+});
+
+test("coming back to a world that ran on replays what was missed", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const { isBookkeeping } = await import("../app/director.js");
+  const world = createWorld({ seed: 42 });
+  runTicks(world, 240);
+  // Stand where the keeper last stood: a real absence, with real story in it.
+  const { beatTier: tierOf } = await import("../app/director.js");
+  for (let i = 0; i < 60; i++) {
+    const recent = world.events.filter(e => e.tick > world.clock.tick - 12 && !isBookkeeping(e) && tierOf(e) !== "texture");
+    if (recent.length >= 2) break;
+    runTicks(world, 4);
+  }
+  const lastSeenTick = world.clock.tick - 12;
+  assert.ok(
+    world.events.some(e => e.tick > lastSeenTick && !isBookkeeping(e) && tierOf(e) !== "texture"),
+    "the absence has something worth watching in it"
+  );
+  const savedState = {
+    world: serializeWorld(world),
+    settings: {}, chats: {}, chatRoles: {}, ui: {},
+    lastSeenAt: Date.now() - 3600 * 1000,
+    lastSeenTick
+  };
+
+  const app = await bootApp({ savedState });
+  try {
+    const doc = app.document;
+    const banner = doc.getElementById("beat-banner");
+    assert.ok(!banner.classList.contains("hidden"), "the app starts by showing what was missed");
+    assert.ok(banner.classList.contains("replaying"), "and says it is a replay");
+    assert.ok(doc.querySelector("#activity-feed .feed-quiet.replay"), "the feed is reading the past back");
+    assert.equal(doc.querySelectorAll("#timeline .tl-seg.playing").length, 1,
+      "and the timeline shows where the film started");
+    // A tap is "get me to now".
+    banner.click();
+    assert.ok(banner.classList.contains("hidden"), "the replay can be skipped");
+    assert.equal(doc.querySelector("#activity-feed .feed-quiet.replay"), null, "and the feed catches up");
+  } finally { app.restore(); }
+});
+
+test("a model can write the conversations again, and the record is not touched", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const { logEvent } = await import("../engine/model/events.js");
+  const world = createWorld({ seed: 42 });
+  runTicks(world, 240);
+  // No moments this tick: the only call the app should make is the retelling.
+  world.config.moments.maxPerTick = 0;
+  world.pending = [];
+  const [a, b] = world.agents.filter(x => !x.retired);
+  const engineLines = ["Wren and Corva talked for a while, and it was easy.", "Neither of them said the true thing."];
+  const scene = logEvent(world, {
+    kind: "contact",
+    agentId: a.id,
+    subjectId: b.id,
+    text: a.name + " and " + b.name + " talked for a while, and it was easy.",
+    significance: 0.6,
+    scene: [
+      { speakerId: a.id, text: engineLines[0] },
+      { speakerId: b.id, text: engineLines[1] }
+    ]
+  });
+  const savedState = {
+    world: serializeWorld(world),
+    settings: { provider: "gemini", keys: { gemini: "AIKEY" }, retell: true },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+  const modelReply = a.name + ": I did not come here to argue with you.\n" +
+    b.name + ": Then you came to the wrong place.\n";
+  const app = await bootApp({ savedState, modelReply });
+  try {
+    const doc = app.document;
+    doc.getElementById("btn-tick").click();
+    // The tick, then the call it was worth spending.
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      const saved = JSON.parse(app.window.localStorage.getItem("agentsworld.v2"));
+      if (saved.retold && saved.retold[scene.id]) break;
+    }
+    const saved = JSON.parse(app.window.localStorage.getItem("agentsworld.v2"));
+
+    // 1. The model's lines are kept, with the model that wrote them.
+    const retelling = saved.retold[scene.id];
+    assert.ok(retelling, "the conversation was retold");
+    assert.equal(retelling.lines.length, 2);
+    assert.match(retelling.lines[0].text, /did not come here to argue/);
+    assert.equal(retelling.lines[0].speakerId, a.id, "lines are attributed to the right people");
+
+    // 2. The world is not touched: the record still holds what the engine wrote.
+    const kept = JSON.parse(saved.world).events.find((/** @type {any} */ e) => e.id === scene.id);
+    assert.deepEqual(kept.scene.map((/** @type {any} */ l) => l.text), engineLines,
+      "the engine's lines are the record, and a retelling does not overwrite them");
+
+    // 3. And the screen shows the retelling, marked as one.
+    doc.querySelector('.rtab[data-view="feed"]').click();
+    const card = $$(doc, "#record-pane .thread-event, #record-pane .event").find(c => c.textContent.includes("did not come here to argue"));
+    assert.ok(card, "the retelling is what the keeper reads");
+    assert.ok(card.querySelector(".scene.retold"), "and it is drawn as a retelling");
+    assert.match(card.querySelector(".retold-tag").textContent, /retold by/);
+  } finally { app.restore(); }
+});
+
+test("with the retelling switched off, no model call is made for a conversation", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const { logEvent } = await import("../engine/model/events.js");
+  const world = createWorld({ seed: 42 });
+  runTicks(world, 240);
+  world.config.moments.maxPerTick = 0;
+  world.pending = [];
+  const [a, b] = world.agents.filter(x => !x.retired);
+  logEvent(world, {
+    kind: "contact", agentId: a.id, subjectId: b.id,
+    text: a.name + " and " + b.name + " talked for a while.",
+    significance: 0.6,
+    scene: [{ speakerId: a.id, text: "Wren and Corva talked for a while, and it was easy." }, { speakerId: b.id, text: "Neither of them said the true thing." }]
+  });
+  const savedState = {
+    world: serializeWorld(world),
+    settings: { provider: "gemini", keys: { gemini: "AIKEY" }, retell: false },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+  const app = await bootApp({ savedState, modelReply: "should never be called" });
+  try {
+    app.document.getElementById("btn-tick").click();
+    await new Promise(r => setTimeout(r, 200));
+    const saved = JSON.parse(app.window.localStorage.getItem("agentsworld.v2"));
+    assert.deepEqual(Object.keys(saved.retold || {}), [], "nothing was retold");
+    for (const url of app.requested) {
+      assert.ok(url.endsWith("api/world"), "the app only looked for a world: " + url);
+    }
+  } finally { app.restore(); }
+});
+
+test("the timeline is a day of ticks, and a quiet one cannot be scrubbed into a film", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    const segs = $$(doc, "#timeline .tl-seg");
+    assert.equal(segs.length, 48, "the strip is one world day, one tick at a time");
+    for (const seg of segs) {
+      assert.match(seg.className, /tl-seg (quiet|notable|beat|moment)/, "every tick is drawn by how much happened in it");
+      assert.ok(seg.dataset.tick);
+    }
+    assert.equal(doc.querySelectorAll("#timeline .tl-seg.now").length, 1, "the present is on the strip");
+
+    // Scrubbing to the present is not a replay.
+    const now = segs[segs.length - 1];
+    now.click();
+    assert.ok(doc.getElementById("beat-banner").classList.contains("hidden"), "there is nothing to catch up on");
+    assert.match(doc.getElementById("toast")?.textContent || "", /where the world is now/, "and the app says so");
   } finally { restore(); }
 });
 
@@ -365,6 +724,99 @@ test("when the background service is running, the app shows its world and does n
 });
 
 
+test("a world kept elsewhere announces its beats as it moves", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const served = createWorld({ seed: 42 });
+  runTicks(served, 240);
+  // The service serializes the whole world on every poll, so this app sees a new
+  // object every ten seconds. If that reads as a new world, nothing the world
+  // does on its own is ever worth announcing — which is exactly the bug this
+  // pins: the announcement watermark has to survive the world being re-read.
+  let payload = serializeWorld(served);
+  const app = await bootApp({ serviceJson: () => payload });
+  try {
+    const doc = app.document;
+    const banner = doc.getElementById("beat-banner");
+    assert.ok(banner.classList.contains("hidden"), "adopting a world is not an arrival");
+
+    // The world moves on while the app is closed, the way a hosted world does.
+    let beat = null;
+    for (let i = 0; i < 40 && !beat; i++) {
+      runTicks(served, 1);
+      const newest = served.events[0];
+      if (newest && newest.kind !== "relationship" && newest.significance >= 0.6) beat = newest;
+    }
+    assert.ok(beat, "a served world produces a beat inside a day of its own time");
+
+    payload = serializeWorld(served);
+    doc.getElementById("btn-service-check").click();
+    await new Promise(r => setTimeout(r, 30));
+    assert.ok(!banner.classList.contains("hidden"), "the next poll announces it");
+    assert.ok(
+      banner.textContent.includes(beat.text.slice(0, 24)),
+      "and the announcement is the thing that actually happened"
+    );
+  } finally { app.restore(); }
+});
+
+test("a hosted world that ran on plays its missed ticks back, rather than only being adopted", async () => {
+  const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
+  const { isBookkeeping, beatTier } = await import("../app/director.js");
+  const served = createWorld({ seed: 42 });
+  runTicks(served, 240);
+  let payload = serializeWorld(served);
+  const app = await bootApp({ serviceJson: () => payload });
+  try {
+    const doc = app.document;
+    const banner = doc.getElementById("beat-banner");
+
+    // The world lives on without the app: a real absence, longer than the floor
+    // a replay needs, and with something in it.
+    const from = served.clock.tick;
+    for (let i = 0; i < 40; i++) {
+      runTicks(served, 4);
+      const seen = served.events.filter(e => e.tick > from && !isBookkeeping(e) && beatTier(e) !== "texture");
+      if (served.clock.tick - from >= 12 && seen.length >= 2) break;
+    }
+    assert.ok(
+      served.events.some(e => e.tick > from && !isBookkeeping(e) && beatTier(e) !== "texture"),
+      "the ticks missed in the interval are worth watching"
+    );
+    payload = serializeWorld(served);
+
+    doc.getElementById("btn-service-check").click();
+    await new Promise(r => setTimeout(r, 30));
+    assert.ok(banner.classList.contains("replaying"), "the app plays back what it missed, it does not just adopt it");
+    assert.ok(doc.querySelector("#activity-feed .feed-quiet.replay"), "and the feed reads as the story of the absence");
+    // Nothing interrupts a film — not a later, smaller catch-up, and not a real
+    // moment landing in the live world while the story behind it is being told.
+    const frame = banner.innerHTML;
+    const { logEvent } = await import("../engine/model/events.js");
+    logEvent(served, {
+      kind: "feud", significance: 1,
+      text: "The two of them settled it, and only one of them was left standing."
+    });
+    payload = serializeWorld(served);
+    doc.getElementById("btn-service-check").click();
+    await new Promise(r => setTimeout(r, 30));
+    assert.equal(banner.innerHTML, frame, "the film it is already showing is not interrupted");
+    assert.ok(doc.querySelector("#activity-feed .feed-quiet.replay"),
+      "and its feed is not wiped by the world moving underneath it");
+    assert.equal(doc.querySelectorAll("#timeline .tl-seg.playing").length, 1,
+      "and the timeline says where the film starts");
+
+    // A film is about one world. Pointing the app at a different one ends it:
+    // somebody else's ticks are not this keeper's absence.
+    const other = createWorld({ seed: 7 });
+    runTicks(other, 120);
+    payload = serializeWorld(other);
+    doc.getElementById("btn-service-check").click();
+    await new Promise(r => setTimeout(r, 30));
+    assert.ok(banner.classList.contains("hidden"), "the film of the old world does not play over the new one");
+    assert.equal(doc.querySelector("#activity-feed .feed-quiet.replay"), null, "nor does its feed");
+  } finally { app.restore(); }
+});
+
 test("coming back after hours shows what the world did while the keeper was gone", async () => {
   const { createWorld, serializeWorld } = await import("../engine/index.js");
   const world = createWorld({ seed: 12 });
@@ -410,7 +862,8 @@ test("when the background service kept the world alive, the app says what it did
     chats: {},
     chatRoles: {},
     ui: {},
-    lastSeenAt: Date.now() - 3 * 3600 * 1000
+    lastSeenAt: Date.now() - 3 * 3600 * 1000,
+    lastSeenTick: mine.clock.tick
   };
   // The service holds the same world, three hours further along.
   const served = deserializeWorld(serializeWorld(mine));
@@ -427,6 +880,15 @@ test("when the background service kept the world alive, the app says what it did
     const toast = doc.getElementById("toast");
     assert.ok(toast && /While you were away/.test(toast.textContent),
       "and the keeper hears about it on the way in");
+
+    // Two hundred and forty ticks is a long absence, and the world is the one
+    // they were watching: it is played back, not only described.
+    const banner = doc.getElementById("beat-banner");
+    assert.ok(banner.classList.contains("replaying"),
+      "the world the keeper was already watching is played back on arrival");
+    assert.ok(doc.querySelector("#activity-feed .feed-quiet.replay"), "and the feed reads as the absence");
+    banner.click();
+    assert.ok(banner.classList.contains("hidden"), "a tap gets the keeper to now");
 
     doc.querySelector('.rtab[data-view="chronicle"]').click();
     assert.ok(doc.querySelector("#record-pane .away-card"),

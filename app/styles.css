@@ -176,6 +176,115 @@ main { flex: 1; overflow-y: auto; padding: 0 12px 12px; -webkit-overflow-scrolli
 .event .ewho { cursor: pointer; color: var(--muted); }
 .event .ewho:hover { color: var(--text); }
 
+/* Weight, not just colour: the engine scores every event 0..1 for how much it
+   mattered, and the screen now reads that score. A mind who took the day off
+   should not occupy the same room as the wall standing. */
+.event.tier-texture { opacity: 0.72; }
+.event.tier-texture .etext { font-size: 13px; color: #b9b9c6; }
+.event.tier-notable .etext { font-size: 14px; }
+.event.tier-beat { box-shadow: 0 2px 14px rgba(0,0,0,0.35); }
+.event.tier-beat .etext { font-size: 15px; }
+.event.tier-moment {
+  padding: 14px; border-color: #3a3222;
+  box-shadow: 0 4px 22px rgba(0,0,0,0.45);
+}
+.event.tier-moment .etext {
+  font-family: var(--serif); font-size: 17px; line-height: 1.35; color: #f7ecd2;
+}
+.beat-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid #6b5423; background: rgba(251,191,36,0.09);
+  color: #f0cf8a; font-size: 9px; font-weight: 800; letter-spacing: 1.6px;
+  text-transform: uppercase; font-variant: normal;
+}
+
+/* The honest footnote under the feed: how much the world did that nobody would
+   have said out loud, since the oldest line above. */
+.feed-quiet {
+  margin: 2px 4px 10px; color: #6f6f7e; font-size: 11.5px; letter-spacing: 0.3px;
+  text-align: center;
+}
+
+/* ---------- the director: what the world is doing, and how fast ---------- */
+.director-note {
+  margin: 2px 4px 6px; font-size: 11px; letter-spacing: 0.6px; text-transform: uppercase;
+  color: var(--muted);
+}
+.director-note::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle; background: var(--muted);
+}
+.director-note.lvl-hot { color: #ffd0c4; }
+.director-note.lvl-hot::before { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+.director-note.lvl-live { color: #f5d995; }
+.director-note.lvl-live::before { background: var(--gold); }
+.director-note.lvl-settling::before { background: var(--accent2); }
+.director-note.lvl-quiet { opacity: 0.75; }
+
+/* ---------- storylines: what story is running, and who to watch ---------- */
+#storylines { display: grid; gap: 8px; margin: 4px 0 2px; }
+.storyline { margin: 0; border-left: 3px solid #2a2a35; cursor: pointer; }
+.storyline .story-title {
+  font-family: var(--serif); font-size: 16px; line-height: 1.3; margin: 4px 0 0; color: #f6efe3;
+}
+.storyline .story-line { margin: 5px 0 0; font-size: 13px; line-height: 1.4; color: #c9c9d6; }
+.storyline .story-meta {
+  margin: 6px 0 0; font-size: 11px; color: var(--muted);
+  letter-spacing: 0.4px; font-variant: small-caps;
+}
+.storyline .story-act {
+  margin: 8px 0 0; background: none; border: 1px solid #33333f; color: var(--accent2);
+  border-radius: 999px; padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.storyline .story-act:hover { border-color: var(--accent); color: #fff; }
+.storyline.tone-blood { border-left-color: var(--blood); background: linear-gradient(90deg, rgba(248,113,113,0.06), var(--card) 40%); }
+.storyline.tone-violet { border-left-color: var(--violet); background: linear-gradient(90deg, rgba(192,132,252,0.06), var(--card) 40%); }
+.storyline.tone-gold { border-left-color: var(--gold); background: linear-gradient(90deg, rgba(251,191,36,0.06), var(--card) 40%); }
+.storyline.tone-ember { border-left-color: var(--ember); background: linear-gradient(90deg, rgba(251,146,60,0.07), var(--card) 40%); }
+
+/* ---------- today, in one sentence ---------- */
+#today-line {
+  margin: 10px 0 0; padding-top: 9px; border-top: 1px solid #23232f;
+  font-size: 12px; line-height: 1.45; color: #b9b9c6;
+}
+#today-line.quiet { color: var(--muted); font-style: italic; }
+
+/* ---------- the ambient row: a run of walking, folded into one ---------- */
+.event.ambient { padding: 9px 12px; opacity: 0.82; border-left-color: #262632; }
+.event.ambient .ambient-faces { display: flex; gap: 3px; flex: 0 0 auto; }
+.event.ambient .ambient-face { width: 22px; height: 22px; display: inline-flex; }
+.event.ambient .ambient-face .portrait { width: 22px; height: 22px; font-size: 13px; }
+.event.ambient .ambient-body { flex: 1; min-width: 0; }
+.event.ambient .ambient-line { font-size: 12.5px; line-height: 1.45; color: #b3b3c0; }
+.event.ambient .ambient-line b { font-weight: 600; }
+.event.ambient .ambient-line.more { color: #6f6f7e; font-style: italic; margin-top: 2px; }
+.feed-quiet.replay { color: var(--accent2); }
+
+/* ---------- the arrival: a beat taking over the top of the world screen ------ */
+#beat-banner { cursor: pointer; }
+#beat-banner .beat-text {
+  font-family: var(--serif); font-size: 17px; line-height: 1.4; margin: 6px 0 0;
+  color: #f6efe3;
+}
+#beat-banner .beat-who {
+  margin: 6px 0 0; font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--muted);
+}
+#beat-banner.tier-moment { border-color: #59431c; background: linear-gradient(180deg, #221c11, var(--card)); }
+#beat-banner.tier-moment .beat-text { font-size: 19px; color: #ffefc8; }
+#beat-banner.tier-beat { border-color: #2c2c3a; }
+#beat-banner.tone-blood { border-color: #4a2a2a; }
+#beat-banner.tone-blood .beat-text { color: #ffd9d4; }
+#beat-banner.tone-gold { border-color: #4a3d1c; }
+#beat-banner.tone-gold .beat-text { color: #ffefc8; }
+#beat-banner.tone-violet { border-color: #3a2f5c; }
+#beat-banner.tone-mist { border-color: #24404d; }
+#beat-banner.beat-in { animation: beat-arrive 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.05) both; }
+@keyframes beat-arrive {
+  from { opacity: 0; transform: translateY(-14px) scale(0.97); filter: brightness(1.8); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
 .more-link {
   display: block; width: 100%; text-align: center; background: none;
   border: 1px dashed #2f2f3d; color: var(--accent2); border-radius: 12px;
@@ -621,3 +730,83 @@ textarea { resize: vertical; min-height: 56px; }
 
 /* ---- where the world is kept: the live badge says so ---- */
 #live-badge.remote { border-color: rgba(159, 214, 201, 0.5); }
+
+/* ---- the watch button, and watch mode ----
+   Watch mode is the other thing this app can be: the map, the beats, and
+   nothing to press. Everything it hides is a control, and nothing it hides is
+   information — the vitals stay on the headline, the storylines stay, and the
+   beats hold twice as long because there is nowhere else to look. */
+.tb-right { display: flex; flex-direction: column; align-items: flex-end; }
+.watch-btn {
+  margin: 6px 0 0 auto; background: none; border: 1px solid #2f2f3d;
+  color: var(--muted); border-radius: 999px; padding: 4px 10px; font-size: 10px;
+  font-weight: 700; letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
+}
+.watch-btn:hover { color: var(--text); border-color: var(--accent); }
+.watch-btn.on { color: var(--gold); border-color: rgba(251, 191, 36, 0.6); }
+label.check { display: block; margin-top: 6px; font-size: 12px; color: var(--text); }
+label.check input { margin-right: 6px; }
+label.check .note { display: inline; }
+
+body.watching { background: #07070b; }
+body.watching #tabbar { display: none; }
+body.watching #topbar { padding-bottom: 2px; }
+body.watching #topbar h1 { font-size: 34px; }
+body.watching .watch-btn { display: inline-block; color: var(--gold); border-color: var(--gold); }
+body.watching #want-card,
+body.watching #keeper-strip,
+body.watching #project-card,
+body.watching #more-feed,
+body.watching #map-hint,
+body.watching #screen-minds,
+body.watching #screen-record,
+body.watching #screen-messages,
+body.watching #screen-admin { display: none !important; }
+body.watching #screen-world { display: block; }
+body.watching main { padding: 0 4px 12px; }
+body.watching #headline-card { background: transparent; border-color: transparent; box-shadow: none; }
+body.watching #headline-text { font-size: 21px; }
+body.watching #vitals { display: none; }
+body.watching .storyline { padding: 14px; }
+body.watching .storyline .story-act { display: none; }
+body.watching #map { margin: 6px 0; }
+body.watching #map canvas { border-radius: 14px; }
+body.watching #activity-feed .event { padding: 14px; }
+body.watching #activity-feed .etext { font-size: 15px; }
+body.watching #beat-banner .beat-text { font-size: 22px; }
+body.watching #beat-banner.tier-moment .beat-text { font-size: 26px; }
+body.watching .director-note { font-size: 12px; }
+body.watching #today-line { font-size: 13px; }
+
+/* ---- the timeline: the last day, one tick at a time ----
+   The World screen shows the last few things that happened; this shows when they
+   happened, and lets a keeper rewind to any of it. Segments are coloured by the
+   best thing that tick had in it, so a hot stretch of world reads as a band of
+   gold and blood rather than requiring the feed to be read. */
+#timeline-wrap { margin: 2px 0 8px; }
+#timeline {
+  display: flex; gap: 1px; align-items: flex-end; height: 34px; padding: 4px 2px;
+  background: linear-gradient(180deg, transparent, rgba(255,255,255,0.02));
+  border: 1px solid #1e1e28; border-radius: 10px;
+}
+#timeline .tl-seg {
+  flex: 1 1 0; min-width: 0; border-radius: 2px; cursor: pointer;
+  background: #1b1b24; height: 30%; align-self: flex-end; transition: height .2s, background .2s;
+}
+#timeline .tl-seg.notable { height: 52%; background: #2f3a4d; }
+#timeline .tl-seg.beat { height: 76%; background: #6b5423; }
+#timeline .tl-seg.moment { height: 100%; background: linear-gradient(180deg, #fbbf24, #b45309); }
+#timeline .tl-seg:hover { outline: 1px solid var(--accent2); }
+#timeline .tl-seg.now { box-shadow: 0 0 8px rgba(139,92,246,.9); }
+#timeline .tl-seg.playing { outline: 1px solid var(--accent2); background: var(--accent2); }
+#timeline-note { margin: 4px 2px 0; font-size: 11px; color: #6f6f7e; text-align: center; }
+
+/* ---- a conversation the model wrote again ----
+   The engine's lines are the record; these are drawn over them, and the mark
+   says so, because a keeper should never have to guess which is which. */
+.scene.retold { border-left-color: rgba(167, 139, 250, 0.5); }
+.scene.retold .sline { color: #dcd6ee; }
+.retold-tag {
+  font-size: 9px; letter-spacing: 1.4px; text-transform: uppercase;
+  color: rgba(167, 139, 250, 0.75);
+}
