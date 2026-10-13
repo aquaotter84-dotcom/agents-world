@@ -6,15 +6,16 @@
  * Two rules shape everything here:
  *
  *   1. The world never waits for a model. With an API key the biggest beats of
- *      each tick are written by BluesMinds; without one the engine narrates
- *      them itself. Either way the map moves, the feed fills, and days close
- *      into chronicle entries. A key changes the voice, not the world.
+ *      each tick are written by the keeper's chosen provider (Google AI Studio,
+ *      BluesMinds, or any OpenAI-compatible endpoint); without one the engine
+ *      narrates them itself. Either way the map moves, the feed fills, and days
+ *      close into chronicle entries. A key changes the voice, not the world.
  *   2. The engine already knows more than the screen was showing — grudges,
  *      bonds, factions, secrets, what each mind is chewing on — so the UI's job
  *      is to put that on the surface rather than to invent a layer on top.
  *
  * The API key lives ONLY in localStorage, is never logged, and is sent only to
- * https://api.bluesminds.com. No background service: ticks run while the app is
+ * the active provider's endpoint (see app/providers.js). No background service: ticks run while the app is
  * open, and any time the app was closed is paid back on load as a catch-up.
  */
 import {
@@ -44,6 +45,7 @@ import { migrateV1Save } from "./migrate.js";
 import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
+import { PROVIDERS, providerById, providerCallOf, normalizeSettings, hostOf } from "./providers.js";
 import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing, mourningMarks, divineMarks } from "./board.js";
 import { digestMark, awayDigest, digestLine } from "./digest.js";
 
@@ -63,7 +65,8 @@ function worldNameFor(seed) {
   return "The " + WORLD_FIRST[h % WORLD_FIRST.length] + " " + WORLD_LAST[(h >>> 7) % WORLD_LAST.length];
 }
 const OLD_KEY = "agentsworld.v1";
-const BM_URL = "https://api.bluesminds.com/v1/chat/completions";
+/* Model providers (endpoints, keys, models) live in ./providers.js — the
+ * only place in the app that names a URL. */
 const THOUGHT_TTL_MS = 5 * 60 * 1000;
 /** A brand-new world is given this much history so it opens mid-story. */
 const OPENING_TICKS = 108;          // just over two world days
@@ -90,7 +93,7 @@ const ICONS = ["✦", "✧", "❖", "◉", "◎", "⛨", "⛉", "⚒", "☾", "�
 
 /* ---------- state ---------- */
 let world = null;
-let settings = { apiKey: "", model: "openai/gpt-oss-20b", tickSeconds: 45, serviceUrl: "" };
+let settings = normalizeSettings({});
 let chats = {};
 let chatRoles = {};
 let ui = { selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
@@ -222,6 +225,7 @@ function load() {
       const s = JSON.parse(raw);
       world = deserializeWorld(s.world);
       settings = Object.assign(settings, s.settings);
+      settings = normalizeSettings(settings);
       chats = s.chats || {};
       chatRoles = s.chatRoles || {};
       ui = Object.assign(ui, s.ui);
@@ -239,8 +243,9 @@ function load() {
         world = mig.world;
         chats = mig.chats;
         if (old.settings) {
-          if (old.settings.apiKey) settings.apiKey = old.settings.apiKey;
-          if (old.settings.model) settings.model = old.settings.model;
+          // Legacy flat keys were always BluesMinds keys — they stay BluesMinds keys.
+          if (old.settings.apiKey) { settings.provider = "bluesminds"; settings.keys.bluesminds = old.settings.apiKey; }
+          if (old.settings.model) settings.models.bluesminds = old.settings.model;
           if (old.settings.tickSeconds) settings.tickSeconds = old.settings.tickSeconds;
         }
         lastSeenAt = Date.now();
@@ -274,9 +279,11 @@ function toast(msg, ms) {
   toastTimer = setTimeout(() => el.classList.remove("show"), ms || 4600);
 }
 const tickNow = () => world.clock.tick;
-const hasKey = () => !!(settings.apiKey && settings.apiKey.trim());
+/** The resolved provider call, or null when there is no usable key/endpoint. */
+const activeCall = () => { try { return providerCallOf(settings); } catch (e) { return null; } };
+const hasKey = () => !!activeCall();
 const agentName = a => a.name + (a.epithet ? " " + a.epithet : "");
-const modelLabel = () => (hasKey() ? (settings.model || "a model") : "the engine");
+const modelLabel = () => { const c = activeCall(); return c ? (c.model || "a model") : "the engine"; };
 
 /* Stable per-agent jitter so minds sharing a region don't stack on one dot. */
 function jitterFor(id) {
@@ -352,39 +359,38 @@ function doingLine(a) {
   return "At " + regionName(world, a.regionId) + ", working on: " + a.goal.text;
 }
 
-/* ---------- BluesMinds: one call at a time, spaced, with 429 backoff ---------- */
-let bmQueue = Promise.resolve();
-let bmNextAt = 0;
-let bmBackoffUntil = 0;
-const BM_GAP_MS = 4000;
+/* ---------- model calls: one at a time, spaced, with 429 backoff ---------- */
+let modelQueue = Promise.resolve();
+let modelNextAt = 0;
+let modelBackoffUntil = 0;
+const MODEL_GAP_MS = 4000;
 
-async function bmChat(messages, maxTokens) {
-  const task = bmQueue.then(async () => {
+async function modelChat(messages, maxTokens) {
+  const task = modelQueue.then(async () => {
     const now = Date.now();
-    if (now < bmBackoffUntil) await sleep(bmBackoffUntil - now);
-    const gap = bmNextAt - Date.now();
+    if (now < modelBackoffUntil) await sleep(modelBackoffUntil - now);
+    const gap = modelNextAt - Date.now();
     if (gap > 0) await sleep(gap);
     try {
-      return await bmChatOnce(messages, maxTokens);
+      return await modelChatOnce(messages, maxTokens);
     } finally {
-      bmNextAt = Date.now() + BM_GAP_MS;
+      modelNextAt = Date.now() + MODEL_GAP_MS;
     }
   });
-  bmQueue = task.catch(() => {}); // a failed call must not break the chain
+  modelQueue = task.catch(() => {}); // a failed call must not break the chain
   return task;
 }
 
-async function bmChatOnce(messages, maxTokens) {
-  const key = settings.apiKey.trim();
-  if (!key) throw new Error("no-key");
+async function modelChatOnce(messages, maxTokens) {
+  const call = providerCallOf(settings); // throws "no-key", "no-url" or "bad-url"
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 45000);
   try {
-    const res = await fetch(BM_URL, {
+    const res = await fetch(call.url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + call.key },
       body: JSON.stringify({
-        model: settings.model || "openai/gpt-oss-20b",
+        model: call.model,
         messages,
         max_tokens: maxTokens || 120,
         temperature: 0.9
@@ -393,7 +399,7 @@ async function bmChatOnce(messages, maxTokens) {
     });
     if (res.status === 429) {
       const ra = parseInt(res.headers.get("retry-after") || "0", 10);
-      bmBackoffUntil = Date.now() + Math.max(isNaN(ra) ? 0 : ra * 1000, 30000);
+      modelBackoffUntil = Date.now() + Math.max(isNaN(ra) ? 0 : ra * 1000, 30000);
       throw new Error("rate-limited — resting a bit");
     }
     if (!res.ok) {
@@ -474,7 +480,7 @@ async function resolveMomentWithModel(moment, manual) {
   const { messages, maxTokens } = buildPrompt(world, moment);
   if (!messages.length) return;
   try {
-    const raw = await bmChat(messages, maxTokens);
+    const raw = await modelChat(messages, maxTokens);
     const answer = parseReply(raw, moment);
     const res = resolveMoment(world, moment.id, answer);
     if (res.ok) {
@@ -495,7 +501,7 @@ async function fetchThought(a) {
   const sys = "You are " + agentName(a) + ", " + a.personality +
     ".\nLive state: " + stateLine(a, tickNow()) +
     ".\n\nReply with ONLY your current private thought: one short sentence, first person. No preamble, no planning, no quotes.";
-  const raw = await bmChat([
+  const raw = await modelChat([
     { role: "system", content: sys },
     { role: "user", content: "Your private thought?" }
   ], 80);
@@ -517,11 +523,11 @@ async function mindReplies(a, history, roleId) {
     ".\nStay in character, be vivid but concise (a few sentences max). Never mention you are AI. Never narrate your reasoning or describe what you are about to say — output only the reply itself.";
   const msgs = [{ role: "system", content: sys }]
     .concat(history.slice(-14).map(h => ({ role: h.role, content: h.content })));
-  let clean = cleanReply(await bmChat(msgs, 220), a, livingAgents(world));
+  let clean = cleanReply(await modelChat(msgs, 220), a, livingAgents(world));
   if (!clean) {
     // One retry with a firmer nudge before giving up on this reply.
     const retry = msgs.concat([{ role: "user", content: "Reply now, in character — no planning, no preamble, only the reply itself." }]);
-    clean = cleanReply(await bmChat(retry, 220), a, livingAgents(world));
+    clean = cleanReply(await modelChat(retry, 220), a, livingAgents(world));
   }
   if (!clean) throw new Error("misfire");
   return clean;
@@ -648,10 +654,11 @@ function renderStats() {
   badge.classList.toggle("remote", serviceMode);
   badge.innerHTML = '<span class="dot"></span>' +
     (!live ? "RECOVERING" : serviceMode ? "REMOTE" : hasKey() ? "LIVE" : "SELF-RUNNING");
+  const call = activeCall();
   $("live-note").textContent = !live
     ? "sleeping minds recover and wake on their own"
     : serviceMode ? "kept by " + serviceHost()
-    : hasKey() ? (settings.model || "model") : "the engine writes it";
+    : call ? (call.model || "model") : "the engine writes it";
 }
 function renderProject() {
   const el = $("project-card");
@@ -3122,8 +3129,16 @@ const SPEEDS = [
   { secs: 20, label: "Frantic", note: "a day every 16 minutes" }
 ];
 function loadAdmin() {
-  $("set-key").value = settings.apiKey || "";
-  $("set-model").value = settings.model || "openai/gpt-oss-20b";
+  const sel = $("set-provider");
+  sel.innerHTML = "";
+  for (const p of PROVIDERS) {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = p.label;
+    sel.appendChild(o);
+  }
+  sel.value = providerById(settings.provider).id;
+  syncProviderFields();
   $("set-service").value = settings.serviceUrl || "";
   const serviceStatus = $("service-status");
   if (serviceStatus) {
@@ -3138,6 +3153,26 @@ function loadAdmin() {
     : "";
   renderSpeeds();
   renderAdminWorld();
+}
+function syncProviderFields() {
+  const p = providerById($("set-provider").value);
+  $("set-key").value = (settings.keys && settings.keys[p.id]) || "";
+  $("set-model").value = (settings.models && settings.models[p.id]) || p.defaultModel;
+  $("set-model").placeholder = p.defaultModel || "model name";
+  const urlRow = $("set-baseurl-row");
+  urlRow.style.display = p.customUrl ? "" : "none";
+  if (p.customUrl) $("set-baseurl").value = (settings.baseUrls && settings.baseUrls[p.id]) || "";
+  $("key-provider-label").textContent = p.label;
+  $("key-note").textContent = "Stored on this device only." +
+    (p.customUrl ? " Sent only to the endpoint below." : " Sent only to " + hostOf(p.url) + ".");
+  const kl = $("key-link");
+  if (p.keyUrl) {
+    kl.href = p.keyUrl;
+    kl.style.display = "";
+    if (p.keyHint) kl.title = p.keyHint;
+  } else {
+    kl.style.display = "none";
+  }
 }
 function renderSpeeds() {
   const row = $("speed-row");
@@ -3161,16 +3196,28 @@ function renderSpeeds() {
       "and it ticks without this app at all.";
 }
 function saveAdmin() {
-  settings.apiKey = $("set-key").value.trim();
-  settings.model = $("set-model").value.trim() || "openai/gpt-oss-20b";
+  const p = providerById($("set-provider").value);
+  settings.provider = p.id;
+  settings.keys = Object.assign({}, settings.keys);
+  settings.keys[p.id] = $("set-key").value.trim();
+  settings.models = Object.assign({}, settings.models);
+  settings.models[p.id] = $("set-model").value.trim() || p.defaultModel;
+  if (p.customUrl) {
+    settings.baseUrls = Object.assign({}, settings.baseUrls);
+    let u = $("set-baseurl").value.trim().replace(/\/+$/, "");
+    // Forgiving on purpose, same as the service address below.
+    if (u && !/^https?:\/\//i.test(u)) u = "https://" + u;
+    settings.baseUrls[p.id] = u;
+  }
   const rawService = $("set-service").value.trim().replace(/\/+$/, "");
   // Forgiving on purpose: "my-world.up.railway.app" is a reasonable thing to
   // paste, and https is the only sane default for a host that is not yours.
   settings.serviceUrl = rawService && !/^https?:\/\//i.test(rawService) ? "https://" + rawService : rawService;
   $("set-service").value = settings.serviceUrl;
   save(); armTick(); renderAll();
-  $("admin-status").textContent = hasKey()
-    ? "Saved. " + (settings.model || "The model") + " now writes the world's biggest moments. First tick in ~" +
+  const call = activeCall();
+  $("admin-status").textContent = call
+    ? "Saved. " + (call.model || "The model") + " via " + call.provider.label + " now writes the world's biggest moments. First tick in ~" +
       (settings.tickSeconds || 45) + "s, or press One tick."
     : "Saved. The world keeps running on its own — no key needed.";
 }
@@ -3526,6 +3573,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("chat-send").addEventListener("click", sendChat);
   $("chat-input").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
   $("btn-save-admin").addEventListener("click", saveAdmin);
+  $("set-provider").addEventListener("change", syncProviderFields);
   $("btn-service-check").addEventListener("click", () => { void checkServiceNow(); });
   $("btn-export-world").addEventListener("click", downloadWorldBackup);
   $("btn-import-world").addEventListener("click", () => {

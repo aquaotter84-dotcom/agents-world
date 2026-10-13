@@ -95,12 +95,18 @@
         <p class="note">Minds think, wander, gossip and feud with no model at all — the engine writes their
           day. A key lets a model take over the biggest moments: the confrontations, confessions and
           betrayals. Everything else is identical either way.</p>
-        <label>BluesMinds API key <span class="note">(optional)</span>
+        <label>Provider
+          <select id="set-provider"></select>
+        </label>
+        <label><span id="key-provider-label">Google AI Studio</span> API key <span class="note">(optional)</span>
           <input id="set-key" type="password" placeholder="Paste key here" autocomplete="off">
         </label>
-        <p class="note">Stored on this device only. Sent only to https://api.bluesminds.com.</p>
+        <p class="note"><span id="key-note">Stored on this device only.</span> <a id="key-link" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Get a free key →</a></p>
+        <label id="set-baseurl-row" style="display:none">Endpoint URL
+          <input id="set-baseurl" type="text" placeholder="https://…/v1/chat/completions" autocomplete="off">
+        </label>
         <label>Model
-          <input id="set-model" type="text" value="openai/gpt-oss-20b" autocomplete="off">
+          <input id="set-model" type="text" value="gemini-2.5-flash" autocomplete="off">
         </label>
       </div>
 

@@ -615,7 +615,7 @@ test("Admin restores a world backup and leaves local credentials and keeper data
     assert.equal(restoredWorld.clock.tick, imported.clock.tick);
     assert.deepEqual(restoredWorld, JSON.parse(serializeWorld(imported)), "all replay-relevant world state is restored");
     assert.deepEqual(restoredState.chats, {}, "chat history tied to the replaced world is cleared");
-    assert.equal(restoredState.settings.apiKey, "local-only-secret", "the device-only API key is neither exported nor overwritten");
+    assert.equal(restoredState.settings.keys.bluesminds, "local-only-secret", "the device-only API key is neither exported nor overwritten");
     assert.match(text(doc, "backup-status"), /Backup restored/);
     assert.match(text(doc, "admin-world"), /seed 987654/);
   } finally { app.restore(); }
