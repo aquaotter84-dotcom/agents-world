@@ -644,6 +644,15 @@ export const DEFAULT_CONFIG = {
     foodPerMindPerDay: 1,
     /** A day nobody ate costs every mind this much energy. */
     starveEnergyPerDay: 7,
+    /** Stores cannot grow without bound: surplus past this is lost. */
+    foodCap: 90,
+    materialsCap: 80,
+    /** Standing buildings eat a little material a day just staying sound. */
+    buildingUpkeepMaterialsPerDay: 0.5,
+    /** Cohesion settles: the Hold's daily friction, before the day's news. */
+    holdFrictionPerDay: 1.4,
+    /** Stone is not free: each wall act in the base game draws this much. */
+    wallMaterialsPerWork: 0.3,
 
     /**
      * The buildings of the camp. `produces` is the store a staffed
@@ -653,7 +662,7 @@ export const DEFAULT_CONFIG = {
      * ground; everything else is built on purpose, over time.
      */
     buildings: [
-      { kind: "fields",   name: "the Fields",       regionId: "lowlands",   produces: "food",      perHandPerDay: 3.9, maxCrew: 3, cost: 0,  workNeeded: 40, startBuilt: true },
+      { kind: "fields",   name: "the Fields",       regionId: "lowlands",   produces: "food",      perHandPerDay: 3.6, maxCrew: 4, cost: 0,  workNeeded: 40, startBuilt: true },
       { kind: "workshop", name: "the Workshop",     regionId: "market",     produces: "materials", perHandPerDay: 2.6, maxCrew: 3, cost: 6,  workNeeded: 60, startBuilt: false },
       { kind: "hall",     name: "the Common Hall",  regionId: "lantern",    produces: null,        perHandPerDay: 0,   maxCrew: 2, cost: 10, workNeeded: 70, startBuilt: false, shelter: 16 },
       { kind: "memorial", name: "the Memorial",     regionId: "crossroads", produces: null,        perHandPerDay: 0,   maxCrew: 3, cost: 8,  workNeeded: 50, startBuilt: false }
@@ -670,8 +679,8 @@ export const DEFAULT_CONFIG = {
      * level 1, and every re-completion after it is the next level. Work on
      * each further level goes this much less far per hand, so the wall
      * stops being a day-one errand and becomes the thing that holds. */
-    wallWorkScale: 0.55,
-    wallLevelWorkGrowth: 0.85,
+    wallWorkScale: 0.18,
+    wallLevelWorkGrowth: 0.5,
 
     /** Storm season, on a forecast clock measured in world days. Strength
      * is deterministic: base plus a stepped cycle, never an RNG draw. */
@@ -751,6 +760,10 @@ export const DEFAULT_CONFIG = {
 
     /** What the ending itself does to the keeper's own meters. */
     collapseWant: { legacy: 3, harmony: -6 },
+
+    /** Without a keeper, the camp starts its next building itself when the
+     * store holds the cost plus this reserve — the world decides. */
+    autoBuildReserve: 4,
 
     /** Work one build/repair act puts in, before social factors. */
     buildWorkBase: 10,

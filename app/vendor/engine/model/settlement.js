@@ -162,8 +162,8 @@ export function normalizeSettlement(raw, config) {
       condition: clamp(num(saved.condition, fresh.condition), 0, 100),
       crew: Array.isArray(saved.crew) ? saved.crew.filter((/** @type {unknown} */ id) => typeof id === "string") : [],
       contributors: saved.contributors && typeof saved.contributors === "object" ? saved.contributors : {},
-      builtTick: num(saved.builtTick, fresh.builtTick ?? 0) || null,
-      completedTick: num(saved.completedTick, fresh.completedTick ?? 0) || null,
+      builtTick: typeof saved.builtTick === "number" ? saved.builtTick : fresh.builtTick,
+      completedTick: typeof saved.completedTick === "number" ? saved.completedTick : fresh.completedTick,
       repairPaid: saved.repairPaid !== false
     };
   });

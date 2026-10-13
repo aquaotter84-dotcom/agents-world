@@ -483,6 +483,12 @@ export function generateIntents(world, agent) {
         score += 18;
         reasons.push("this work serves a priority of theirs");
       }
+      if (settlementActive(world) && foodDays(world) < 3) {
+        // In the base game the wall competes with dinner, and dinner wins
+        // while the stores are low: hands belong on the fields first.
+        score -= 18;
+        reasons.push("the camp needs food before stone");
+      }
       if (agent.regionId === project.regionId) {
         score += 7;
         reasons.push("already at the North Wall");

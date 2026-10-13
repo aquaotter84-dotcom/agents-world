@@ -129,6 +129,9 @@ export function settlementSummary(world) {
 export function settleSettlement(world) {
   if (!settlementActive(world)) return;
   pruneCrews(world);
+  // Checked every tick, not every day: the camp claims its building fund
+  // before the wall's appetite for stone can spend it.
+  autoBuild(world);
   const day = world.clock.day;
   if (day <= world.settlement.lastDay) return;
   // A long catch-up can skip days; settle each one so food, storms and
@@ -189,8 +192,15 @@ function settleOneDay(world, day) {
     }
   }
 
+  // Upkeep and store caps: standing buildings cost a little soundness a
+  // day, and a store nobody can grow past its cap stops being a strategy.
+  const standing = s.buildings.filter(b => b.status === "active" || b.status === "damaged").length;
+  s.stores.materials = Math.max(0, Math.round((s.stores.materials - standing * cfg.buildingUpkeepMaterialsPerDay) * 10) / 10);
+  s.stores.food = Math.min(s.stores.food, cfg.foodCap);
+  s.stores.materials = Math.min(s.stores.materials, cfg.materialsCap);
+
   /* ---- the Hold, fed by the day that actually happened ---- */
-  let holdDelta = 0;
+  let holdDelta = -cfg.holdFrictionPerDay;
   if (fed) holdDelta += cfg.holdFedPerDay; else holdDelta += cfg.holdStarvingPerDay;
   if (fed && pop && s.stores.food / (pop * cfg.foodPerMindPerDay) < 1) holdDelta += cfg.holdLowFoodPerDay;
   const morale = pop ? living.reduce((sum, a) => sum + (a.moodLevel ?? 50), 0) / pop : 50;
@@ -652,7 +662,17 @@ export function resolveStorm(world) {
 function settlePopulation(world, pop) {
   const cfg = world.config.settlement;
   const s = world.settlement;
-  if (pop < cfg.maxPopulation && s.starvingDays === 0 && s.hold >= 55
+  // Growth needs headroom, not just stores: the fields as currently
+  // staffed must be able to feed one more mouth with room to spare.
+  const fields = buildingByKind(s, "fields");
+  const fieldsDef = fields ? buildingDef(world.config, "fields") : null;
+  // Capacity, not today's crew: a wanderer weighing the camp asks whether
+  // its fields *could* feed them — they can put their own hands to it.
+  const dailyFood = fields && fieldsDef
+    ? fieldsDef.maxCrew * fieldsDef.perHandPerDay * buildingOutputFactor(world, fields).factor
+    : 0;
+  const headroom = dailyFood >= (pop + 1) * cfg.foodPerMindPerDay * 1.1;
+  if (headroom && pop < cfg.maxPopulation && s.starvingDays === 0 && s.hold >= 55
       && s.lastDay % cfg.arrivalIntervalDays === 0
       && pop < world.config.turnover.maxCast) {
     arrive(world);
@@ -675,6 +695,24 @@ function settlePopulation(world, pop) {
       });
       mournDeparture(world, leaving);
     }
+  }
+}
+
+/**
+ * Without a keeper, the camp still builds — in its own order, when the
+ * store can pay and keep a reserve. The keeper starting a building
+ * first simply takes the decision out of the world's hands.
+ * @param {World} world
+ */
+function autoBuild(world) {
+  const s = world.settlement;
+  if (s.status === "collapsed") return;
+  if (s.buildings.some(b => b.status === "building")) return;
+  for (const kind of ["workshop", "hall", "memorial"]) {
+    const def = buildingDef(world.config, kind);
+    if (!def) continue;
+    if (s.stores.materials < def.cost + world.config.settlement.autoBuildReserve) continue;
+    if (canConstruct(world, kind).ok) { startConstruction(world, kind); return; }
   }
 }
 

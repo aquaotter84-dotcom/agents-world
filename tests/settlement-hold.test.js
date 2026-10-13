@@ -74,6 +74,11 @@ test("a fed, holding camp under its cap gains people; a broken one loses its wan
   const growing = gameWorld(104);
   growing.settlement.stores.food = 300;
   growing.settlement.hold = 85;
+  // Growth needs the fields able to feed a tenth mouth, not just stores:
+  // the test staffs the full crew the growth rule reads.
+  const gFields = buildingByKind(growing.settlement, "fields");
+  assert.ok(gFields);
+  for (const m of livingAgents(growing).slice(0, 4)) assignCrew(growing, gFields.id, m.id);
   const before = livingAgents(growing).length;
   runTicks(growing, 200);
   assert.ok(livingAgents(growing).length > before,

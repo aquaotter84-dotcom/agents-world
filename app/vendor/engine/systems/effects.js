@@ -193,6 +193,13 @@ function applyProjectWork(world, op, tick) {
     // far per level already raised. Level 1 is the start, not the ending.
     const scfg = world.config.settlement;
     workAmount = workAmount * scfg.wallWorkScale / (1 + world.settlement.wall.level * scfg.wallLevelWorkGrowth);
+    // Stone comes from the store: a camp out of materials raises the wall
+    // at half effect, which is what the workshop's hands are for.
+    if (world.settlement.stores.materials - scfg.wallMaterialsPerWork >= scfg.autoBuildReserve) {
+      world.settlement.stores.materials = Math.round((world.settlement.stores.materials - scfg.wallMaterialsPerWork) * 10) / 10;
+    } else {
+      workAmount *= 0.5;
+    }
   }
   const amount = clamp(Math.round(workAmount), 1, 24);
   const record = project.contributors[actor.id] || (project.contributors[actor.id] = {

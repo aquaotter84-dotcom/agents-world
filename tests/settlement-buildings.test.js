@@ -90,11 +90,12 @@ test("crew staffing is tracked, capped, exclusive, and removable", () => {
   const fields = buildingByKind(world.settlement, "fields");
   assert.ok(fields);
   const minds = livingAgents(world);
-  for (const m of minds.slice(0, 3)) assert.equal(assignCrew(world, fields.id, m.id).ok, true);
-  assert.deepEqual(fields.crew, minds.slice(0, 3).map(m => m.id));
-  const fourth = assignCrew(world, fields.id, minds[3].id);
-  assert.equal(fourth.ok, false, "a full building refuses a fourth hand");
-  assert.match(fourth.reason || "", /hands/);
+  const cap = world.config.settlement.buildings[0].maxCrew;
+  for (const m of minds.slice(0, cap)) assert.equal(assignCrew(world, fields.id, m.id).ok, true);
+  assert.deepEqual(fields.crew, minds.slice(0, cap).map(m => m.id));
+  const extra = assignCrew(world, fields.id, minds[cap].id);
+  assert.equal(extra.ok, false, "a full building refuses another hand");
+  assert.match(extra.reason || "", /hands/);
 
   // One mind, one post: staffing the hall moves them off the fields.
   const hall = buildingByKind(world.settlement, "hall");
