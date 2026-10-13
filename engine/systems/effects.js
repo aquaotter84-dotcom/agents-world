@@ -21,6 +21,7 @@ import { learnSecret, publishSecret, createSecret, agentById, privateSecretsHeld
 import { ruleStrength } from "../model/charter.js";
 import { liveBlessingForAgent, liveBlessingForWork } from "../model/divine.js";
 import { recordWallRaised } from "./charter.js";
+import { applySettlementWork } from "./settlement.js";
 
 /**
  * @typedef {{op: string} & Record<string, any>} EffectOp
@@ -675,6 +676,15 @@ function applyOne(world, op, tick, meta) {
 
     case "project_interfere":
       return applyProjectInterference(world, op, tick);
+
+    case "settlement_work":
+      return applySettlementWork(world, { agent: op.agent, buildingId: op.buildingId, mode: "work", amount: op.amount });
+
+    case "settlement_build":
+      return applySettlementWork(world, { agent: op.agent, buildingId: op.buildingId, mode: "build", amount: op.amount });
+
+    case "settlement_repair":
+      return applySettlementWork(world, { agent: op.agent, buildingId: op.buildingId, mode: "repair", amount: op.amount });
 
     case "event": {
       const agent = agentById(world, op.agent);

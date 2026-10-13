@@ -653,7 +653,7 @@ export const DEFAULT_CONFIG = {
      * ground; everything else is built on purpose, over time.
      */
     buildings: [
-      { kind: "fields",   name: "the Fields",       regionId: "lowlands",   produces: "food",      perHandPerDay: 3.4, maxCrew: 3, cost: 0,  workNeeded: 40, startBuilt: true },
+      { kind: "fields",   name: "the Fields",       regionId: "lowlands",   produces: "food",      perHandPerDay: 3.9, maxCrew: 3, cost: 0,  workNeeded: 40, startBuilt: true },
       { kind: "workshop", name: "the Workshop",     regionId: "market",     produces: "materials", perHandPerDay: 2.6, maxCrew: 3, cost: 6,  workNeeded: 60, startBuilt: false },
       { kind: "hall",     name: "the Common Hall",  regionId: "lantern",    produces: null,        perHandPerDay: 0,   maxCrew: 2, cost: 10, workNeeded: 70, startBuilt: false, shelter: 16 },
       { kind: "memorial", name: "the Memorial",     regionId: "crossroads", produces: null,        perHandPerDay: 0,   maxCrew: 3, cost: 8,  workNeeded: 50, startBuilt: false }

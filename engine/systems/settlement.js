@@ -266,3 +266,253 @@ function pruneCrews(world) {
     });
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Buildings: construction and repair are work over time, never instant,
+ * and staffing is a decision with rules the keeper can read.
+ * ------------------------------------------------------------------ */
+
+/**
+ * What could be built next, and why not — the construction menu.
+ * @param {World} world
+ */
+export function constructionOptions(world) {
+  if (!settlementEnabled(world)) return [];
+  return world.settlement.buildings.map(building => {
+    const def = buildingDef(world.config, building.kind);
+    const check = canConstruct(world, building.kind);
+    return {
+      kind: building.kind, name: building.name, regionId: building.regionId,
+      cost: def?.cost ?? 0, workNeeded: def?.workNeeded ?? 0,
+      status: building.status, can: check.ok, reason: check.ok ? "" : check.reason
+    };
+  });
+}
+
+/**
+ * Validate starting (or restarting) construction of a kind.
+ * @param {World} world
+ * @param {string} kind
+ * @returns {{ok: boolean, reason?: string, building?: Building}}
+ */
+export function canConstruct(world, kind) {
+  if (!settlementActive(world)) return { ok: false, reason: "There is no live camp to build in." };
+  const def = buildingDef(world.config, kind);
+  const building = buildingByKind(world.settlement, kind);
+  if (!def || !building) return { ok: false, reason: "There is no such building to raise." };
+  if (building.status === "building") return { ok: false, reason: `${building.name} is already rising.` };
+  if (building.status === "active") return { ok: false, reason: `${building.name} already stands.` };
+  if (building.status === "damaged") return { ok: false, reason: `${building.name} needs repair, not rebuilding.` };
+  if (kind === "memorial" && !(world.mourning?.memorials?.length || world.mourning?.funerals?.length)) {
+    return { ok: false, reason: "A memorial needs somebody to remember. The camp has lost no one yet." };
+  }
+  if (world.settlement.stores.materials < def.cost) {
+    return { ok: false, reason: `That takes ${def.cost} materials and the camp has ${Math.floor(world.settlement.stores.materials)}.` };
+  }
+  return { ok: true, building };
+}
+
+/**
+ * Begin construction: materials leave the store now, the building rises
+ * only as fast as hands work on it.
+ * @param {World} world
+ * @param {string} kind
+ */
+export function startConstruction(world, kind) {
+  const check = canConstruct(world, kind);
+  if (!check.ok || !check.building) return { ok: false, reason: check.reason };
+  const def = buildingDef(world.config, kind);
+  const building = check.building;
+  world.settlement.stores.materials -= def?.cost ?? 0;
+  building.status = "building";
+  building.progress = 0;
+  building.builtTick = world.clock.tick;
+  logEvent(world, {
+    kind: "building",
+    agentId: null,
+    text: `Work begins on ${building.name}. The materials are counted out; the rest is hands and days.`,
+    significance: 0.58,
+    regionId: building.regionId
+  });
+  return { ok: true, building };
+}
+
+/**
+ * Why this mind cannot staff this building, in one sentence — or null
+ * when they can. The feud rule is read from the pair's real stage.
+ * @param {World} world
+ * @param {Building} building
+ * @param {string} agentId
+ * @returns {string|null}
+ */
+export function staffingBlock(world, building, agentId) {
+  const agent = agentById(world, agentId);
+  if (!agent || agent.retired) return "That mind is gone.";
+  if (building.status !== "active" && building.status !== "damaged") return `${building.name} is not standing yet.`;
+  if (building.crew.includes(agentId)) return null;
+  const def = buildingDef(world.config, building.kind);
+  if (def && building.crew.length >= def.maxCrew) return `${building.name} has all the hands it can hold.`;
+  const conflict = crewConflict(world, building, agentId);
+  if (conflict) {
+    const other = agentById(world, conflict.otherId);
+    return `${agent.name} and ${other?.name || "a hand already there"} are in a ${conflict.stage} — they cannot staff the same building. Rearrange the crew first.`;
+  }
+  return null;
+}
+
+/**
+ * Put a mind on a building's crew (the keeper rearranging who works
+ * where). A mind staffs one building at a time: assignment moves them.
+ * @param {World} world
+ * @param {string} buildingId
+ * @param {string} agentId
+ */
+export function assignCrew(world, buildingId, agentId) {
+  if (!settlementActive(world)) return { ok: false, reason: "There is no live camp to staff." };
+  const building = buildingId === "wall" ? null : buildingById(world.settlement, buildingId);
+  if (!building) return { ok: false, reason: "There is no such building." };
+  const block = staffingBlock(world, building, agentId);
+  if (block) return { ok: false, reason: block };
+  for (const other of world.settlement.buildings) {
+    other.crew = other.crew.filter(id => id !== agentId);
+  }
+  building.crew.push(agentId);
+  return { ok: true, building };
+}
+
+/**
+ * Take a mind off a building's crew.
+ * @param {World} world
+ * @param {string} buildingId
+ * @param {string} agentId
+ */
+export function unassignCrew(world, buildingId, agentId) {
+  const building = buildingById(world.settlement, buildingId);
+  if (!building) return { ok: false, reason: "There is no such building." };
+  building.crew = building.crew.filter(id => id !== agentId);
+  return { ok: true, building };
+}
+
+/**
+ * Apply one settlement work act (called by the effects interpreter).
+ * Modes: `work` staffs and works a standing building, `build` raises
+ * one under construction, `repair` restores a damaged one (or, with
+ * buildingId "wall", the North Wall's condition). Social factors —
+ * above all a mourning pair of hands — bend how far the work goes.
+ * @param {World} world
+ * @param {{agent: string, buildingId: string, mode: string, amount?: number}} op
+ * @returns {import("../model/events.js").WorldEvent|null}
+ */
+export function applySettlementWork(world, op) {
+  if (!settlementActive(world)) return null;
+  const agent = agentById(world, op.agent);
+  if (!agent || agent.retired) return null;
+  const tick = world.clock.tick;
+  const amount = Math.max(1, (Number(op.amount) || world.config.settlement.buildWorkBase) * workFactorFor(world, agent));
+
+  if (op.buildingId === "wall") {
+    if (op.mode !== "repair") return null;
+    const wall = world.settlement.wall;
+    wall.condition = clamp(wall.condition + amount, 0, 100);
+    return null;
+  }
+
+  const building = buildingById(world.settlement, op.buildingId);
+  if (!building) return null;
+  const record = building.contributors[agent.id] || (building.contributors[agent.id] = { work: 0, lastTick: tick });
+  record.work += Math.round(amount * 10) / 10;
+  record.lastTick = tick;
+
+  if (op.mode === "work") {
+    if (!building.crew.includes(agent.id) && !staffingBlock(world, building, agent.id)) {
+      for (const other of world.settlement.buildings) other.crew = other.crew.filter(id => id !== agent.id);
+      building.crew.push(agent.id);
+    }
+    return null;
+  }
+
+  if (op.mode === "build") {
+    if (building.status !== "building") return null;
+    building.progress += amount;
+    if (building.progress >= building.workNeeded) return completeBuilding(world, building);
+    return null;
+  }
+
+  if (op.mode === "repair") {
+    if (building.status !== "damaged") return null;
+    const def = buildingDef(world.config, building.kind);
+    if (!building.repairPaid) {
+      const cost = Math.ceil((def?.cost ?? 0) / 2);
+      if (world.settlement.stores.materials < cost) return null;
+      world.settlement.stores.materials -= cost;
+      building.repairPaid = true;
+      building.progress = 0;
+    }
+    building.progress += amount;
+    if (building.progress >= Math.ceil(building.workNeeded / 2)) {
+      building.status = "active";
+      building.condition = 100;
+      building.progress = 0;
+      building.repairPaid = true;
+      return logEvent(world, {
+        kind: "building",
+        agentId: agent.id,
+        text: `${building.name} stands whole again — the repair crews saw to it.`,
+        significance: 0.62,
+        regionId: building.regionId
+      });
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * A building finishes rising. If it is the Memorial, the hands that
+ * raised it together are bound closer — real edges, real memories.
+ * @param {World} world
+ * @param {Building} building
+ */
+function completeBuilding(world, building) {
+  const tick = world.clock.tick;
+  building.status = "active";
+  building.condition = 100;
+  building.progress = 0;
+  building.completedTick = tick;
+  if (!world.settlement.stats.buildingsBuilt.includes(building.kind)) {
+    world.settlement.stats.buildingsBuilt.push(building.kind);
+  }
+  const builders = /** @type {Agent[]} */ (Object.entries(building.contributors)
+    .filter(([, r]) => r.work > 0)
+    .map(([id]) => agentById(world, id))
+    .filter(a => a !== null && !a.retired));
+
+  if (building.kind === "memorial" && builders.length > 1) {
+    const cfg = world.config.settlement;
+    for (let i = 0; i < builders.length; i++) {
+      for (let j = i + 1; j < builders.length; j++) {
+        const a = builders[i], b = builders[j];
+        adjustEdge(a, b.id, { affinity: cfg.memorialBondAffinity, trust: cfg.memorialBondTrust, familiarity: 6 }, tick);
+        adjustEdge(b, a.id, { affinity: cfg.memorialBondAffinity, trust: cfg.memorialBondTrust, familiarity: 6 }, tick);
+        remember(a.memory, {
+          tick, kind: "goal", subjectId: b.id, valence: 0.7, salience: 0.85,
+          text: `We raised the Memorial together, ${b.name} and I. Some work you do side by side stays in the hands.`
+        }, world.nextId);
+        remember(b.memory, {
+          tick, kind: "goal", subjectId: a.id, valence: 0.7, salience: 0.85,
+          text: `We raised the Memorial together, ${a.name} and I. Some work you do side by side stays in the hands.`
+        }, world.nextId);
+      }
+    }
+  }
+
+  return logEvent(world, {
+    kind: "building",
+    agentId: builders[0]?.id ?? null,
+    text: building.kind === "memorial"
+      ? `The Memorial stands${builders.length > 1 ? `, raised together by ${builders.map(a => a.name).join(", ")}` : ""}. What the camp has lost has a place now.`
+      : `${building.name} stands finished${builders.length ? ` — ${builders.map(a => a.name).join(", ")} raised it` : ""}.`,
+    significance: 0.8,
+    regionId: building.regionId
+  });
+}

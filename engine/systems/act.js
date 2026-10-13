@@ -21,6 +21,8 @@ import { phrase } from "../decision/prose.js";
 import { tellWithMutation } from "./rumour.js";
 import { isNight } from "../clock.js";
 import { generateIntents } from "../decision/intents.js";
+import { buildingById, settlementActive } from "../model/settlement.js";
+import { staffingBlock } from "./settlement.js";
 
 /**
  * @typedef {import("../model/world.js").World} World
@@ -61,6 +63,9 @@ export function resolveIntent(world, agent, intent, ranked) {
     withdraw: resolveWithdraw,
     forge_bond: resolveForgeBond,
     grant_favour: resolveGrantFavour,
+    settlement_work: resolveSettlementWork,
+    settlement_build: resolveSettlementBuild,
+    settlement_repair: resolveSettlementRepair,
     project_contribute: resolveProjectContribute,
     project_help: resolveProjectHelp,
     project_interfere: resolveProjectInterfere,
@@ -642,6 +647,110 @@ function travelToward(world, agent, destRegionId, _targetName, flavour) {
     significance: flavour === "explore" ? 0.3 : 0.12,
     quiet: kind !== "explore",
     ...{}
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * The camp: work a building, raise one, mend one
+ * ------------------------------------------------------------------ */
+
+/**
+ * Travel to a settlement worksite first, like the wall's own rule.
+ * @param {World} world @param {Agent} agent @param {string} regionId @param {string} name
+ */
+function settlementSiteResolution(world, agent, regionId, name) {
+  if (agent.regionId !== regionId) return travelToward(world, agent, regionId, name, "project");
+  return undefined;
+}
+
+/** @param {World} world @param {Agent} agent @param {Intent} intent */
+function resolveSettlementWork(world, agent, intent) {
+  if (!settlementActive(world)) return resolveObserve(world, agent, intent);
+  const building = buildingById(world.settlement, intent.payload?.buildingId || "");
+  if (!building) return resolveObserve(world, agent, intent);
+  const site = settlementSiteResolution(world, agent, building.regionId, building.name);
+  if (site !== undefined) return site || resolveObserve(world, agent, intent);
+  if (!building.crew.includes(agent.id) && staffingBlock(world, building, agent.id)) {
+    return resolveObserve(world, agent, intent);
+  }
+  const amount = world.config.settlement.buildWorkBase + agent.drives.focus * world.config.settlement.buildWorkPerFocus;
+  return {
+    ops: [
+      { op: "settlement_work", agent: agent.id, buildingId: building.id, amount },
+      { op: "need", agent: agent.id, deltas: { energy: -6, meaning: 5, connection: 2 } },
+      { op: "memory", agent: agent.id, trace: {
+        kind: "goal", text: `I worked ${building.name} today. The camp eats and builds out of hands like mine.`,
+        subjectId: null, valence: 0.4, salience: 0.5 } },
+      { op: "xp", agent: agent.id, amount: 11 }
+    ],
+    text: `${agent.name} worked ${building.name}.`,
+    eventKind: "settlement",
+    significance: 0.34,
+    quiet: true
+  };
+}
+
+/** @param {World} world @param {Agent} agent @param {Intent} intent */
+function resolveSettlementBuild(world, agent, intent) {
+  if (!settlementActive(world)) return resolveObserve(world, agent, intent);
+  const building = buildingById(world.settlement, intent.payload?.buildingId || "");
+  if (!building || building.status !== "building") return resolveObserve(world, agent, intent);
+  const site = settlementSiteResolution(world, agent, building.regionId, building.name);
+  if (site !== undefined) return site || resolveObserve(world, agent, intent);
+  const amount = world.config.settlement.buildWorkBase + agent.drives.focus * world.config.settlement.buildWorkPerFocus;
+  return {
+    ops: [
+      { op: "settlement_build", agent: agent.id, buildingId: building.id, amount },
+      { op: "need", agent: agent.id, deltas: { energy: -7, meaning: 6, esteem: 3 } },
+      { op: "memory", agent: agent.id, trace: {
+        kind: "goal", text: `I helped raise ${building.name}. It is not finished, and it is ours.`,
+        subjectId: null, valence: 0.5, salience: 0.6 } },
+      { op: "xp", agent: agent.id, amount: 12 }
+    ],
+    text: `${agent.name} put work into raising ${building.name}.`,
+    eventKind: "building",
+    significance: 0.44,
+    quiet: true
+  };
+}
+
+/** @param {World} world @param {Agent} agent @param {Intent} intent */
+function resolveSettlementRepair(world, agent, intent) {
+  if (!settlementActive(world)) return resolveObserve(world, agent, intent);
+  const buildingId = intent.payload?.buildingId || "";
+  const amount = world.config.settlement.buildWorkBase + agent.drives.focus * world.config.settlement.buildWorkPerFocus;
+  if (buildingId === "wall") {
+    const site = settlementSiteResolution(world, agent, world.project.regionId, "the North Wall");
+    if (site !== undefined) return site || resolveObserve(world, agent, intent);
+    return {
+      ops: [
+        { op: "settlement_repair", agent: agent.id, buildingId: "wall", amount },
+        { op: "need", agent: agent.id, deltas: { energy: -7, meaning: 6 } },
+        { op: "xp", agent: agent.id, amount: 12 }
+      ],
+      text: `${agent.name} mended the North Wall where the weather had worried it.`,
+      eventKind: "building",
+      significance: 0.44,
+      quiet: true
+    };
+  }
+  const building = buildingById(world.settlement, buildingId);
+  if (!building || building.status !== "damaged") return resolveObserve(world, agent, intent);
+  const site = settlementSiteResolution(world, agent, building.regionId, building.name);
+  if (site !== undefined) return site || resolveObserve(world, agent, intent);
+  return {
+    ops: [
+      { op: "settlement_repair", agent: agent.id, buildingId: building.id, amount },
+      { op: "need", agent: agent.id, deltas: { energy: -7, meaning: 6 } },
+      { op: "memory", agent: agent.id, trace: {
+        kind: "goal", text: `I mended ${building.name}. A camp is what you repair.`,
+        subjectId: null, valence: 0.45, salience: 0.55 } },
+      { op: "xp", agent: agent.id, amount: 12 }
+    ],
+    text: `${agent.name} set about mending ${building.name}.`,
+    eventKind: "building",
+    significance: 0.44,
+    quiet: true
   };
 }
 
