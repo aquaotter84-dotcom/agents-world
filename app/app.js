@@ -35,7 +35,9 @@ import {
   wantSummary, wantLog, WANT_LABELS, wantVerdict,
   pendingFunerals, recentMemorials, mournDeparture,
   interventionOptions, canIntervene, performIntervention, recentInterventions,
-  interventionFor, INTERVENTION_INFO
+  interventionFor, INTERVENTION_INFO,
+  settlementSummary, settlementActOptions, performSettlementAct,
+  constructionOptions, startConstruction, assignCrew, unassignCrew, activateSettlement
 } from "./vendor/engine/index.js";
 import { createAgent } from "./vendor/engine/model/agent.js";
 import { createMemory } from "./vendor/engine/model/memory.js";
@@ -249,7 +251,9 @@ function save() {
   } catch (e) { /* storage full/blocked */ }
 }
 function freshWorld(seed) {
-  return createWorld({ seed: seed ?? (1 + Math.floor(Math.random() * 1e9)) });
+  // The app is the game mode: engine defaults keep the camp dormant, and
+  // founding worlds here is what turns the settlement layer on.
+  return createWorld({ seed: seed ?? (1 + Math.floor(Math.random() * 1e9)), config: { settlement: { enabled: true } } });
 }
 /**
  * Read the save. The returned `seen` is where the keeper last stood *as it was
@@ -265,6 +269,9 @@ function load() {
     if (raw) {
       const s = JSON.parse(raw);
       world = deserializeWorld(s.world);
+      // A save from before the camp existed is founded, not left dormant:
+      // the app is the game mode, and this is where it asks for the layer.
+      if (!world.config.settlement?.enabled) activateSettlement(world);
       settings = Object.assign(settings, s.settings);
       settings = normalizeSettings(settings);
       chats = s.chats || {};
@@ -284,6 +291,7 @@ function load() {
       if (old && Array.isArray(old.minds)) {
         const mig = migrateV1Save(old, 1 + Math.floor(Math.random() * 1e9));
         world = mig.world;
+        activateSettlement(world);
         chats = mig.chats;
         if (old.settings) {
           // Legacy flat keys were always BluesMinds keys — they stay BluesMinds keys.
@@ -607,6 +615,8 @@ const KIND_TONE = {
   // The keeper's own acts, and the world telling them it has gone quiet.
   divine: "violet",
   want: "ember",
+  // The camp's own categories: work and endings.
+  settlement: "ember", storm: "blood", building: "gold", collapse: "blood",
   gossip: "mist", contact: "mist"
 };
 /* ---------- watching ----------
@@ -734,7 +744,11 @@ function renderNow() {
       stats.conflicts + "</b></span>",
     camps > 0
       ? '<span class="vital">Camps <b>' + camps + "</b></span>"
-      : '<span class="vital">No camps yet</span>'
+      : '<span class="vital">No camps yet</span>',
+    ...(world.settlement && world.config.settlement?.enabled && world.settlement.status === "active"
+      ? ['<span class="vital" title="food in store, and the camp\'s will to stay together">Food <b>' +
+          settlementSummary(world).foodDays + 'd</b> · Hold <b>' + Math.round(world.settlement.hold) + "</b></span>"]
+      : [])
   ];
   $("vitals").innerHTML = vitals.join("");
 }
@@ -1638,6 +1652,127 @@ function renderHand() {
     '<p class="hand-foot">' + (last
       ? "Last: " + esc(last.effect)
       : "Hold the board to aim these: a mind to bless, a region for a sign, a dilemma to stand in.") + "</p>";
+}
+
+
+/* ---------- the camp ----------
+ * The base game on the World screen, additive to everything already
+ * there: stores, the Hold, the wall as a levelled defence with its
+ * forecast, the buildings and who staffs them, and the keeper's camp
+ * acts priced against the same influence as the hand above it. The
+ * keeper rearranges crews here; the world does the rest. */
+function renderCamp() {
+  const el = $("camp-card");
+  if (!el || !world.settlement) return;
+  const s = settlementSummary(world);
+  if (!s.enabled) {
+    el.innerHTML = '<p class="eyebrow">The camp</p><p class="note">No camp has been founded in this world.</p>';
+    return;
+  }
+  if (s.status === "collapsed") {
+    const legacy = s.legacy;
+    el.innerHTML =
+      '<p class="eyebrow">The camp has scattered</p>' +
+      '<p class="camp-legacy">' + esc(legacy ? legacy.summary : "The camp ended.") + "</p>" +
+      (legacy && legacy.boons.length
+        ? '<p class="note">Carried into the next founding: ' + esc(legacy.boons.join(", ").replace(/_/g, " ")) + ".</p>"
+        : "") +
+      '<div class="row"><button class="btn primary" data-new-camp="1">Found the next camp from their legacy</button></div>';
+    return;
+  }
+  const holdCls = s.hold <= 25 ? " low" : s.hold <= 50 ? " mid" : "";
+  const forecast = s.forecast
+    ? (s.forecast.daysUntil === 0
+        ? "Storm today · strength " + s.forecast.strength
+        : "Storm in " + s.forecast.daysUntil + "d · strength " + s.forecast.strength)
+    : "";
+  const lastStorm = world.settlement.storm.lastOutcome
+    ? ' · last storm ' + esc(world.settlement.storm.lastOutcome) +
+      (world.settlement.storm.lastMargin !== null ? " by " + world.settlement.storm.lastMargin : "")
+    : "";
+  const living = livingAgents(world);
+  const nameOf = id => { const a = agentById(world, id); return a ? a.name : "someone"; };
+  const buildOptions = {};
+  for (const o of constructionOptions(world)) buildOptions[o.kind] = o;
+  const buildingRows = s.buildings.map(b => {
+    const full = world.settlement.buildings.find(x => x.id === b.id);
+    const crewChips = b.crew.length
+      ? b.crew.map(id => '<span class="camp-crew-chip">' + esc(nameOf(id)) +
+          ' <button class="camp-x" data-unassign="' + esc(b.id) + '" data-agent="' + esc(id) + '" title="Take them off this crew">✕</button></span>').join("")
+      : '<span class="note">unstaffed</span>';
+    const eligible = living.filter(a => !b.crew.includes(a.id));
+    const staffRow = (b.status === "active" || b.status === "damaged") && eligible.length
+      ? '<span class="camp-staff"><select class="camp-staff-select" data-for="' + esc(b.id) + '">' +
+          eligible.map(a => '<option value="' + esc(a.id) + '">' + esc(a.name) + "</option>").join("") +
+          '</select><button class="btn small" data-assign="' + esc(b.id) + '">Staff</button></span>'
+      : "";
+    let stateLine = "";
+    if (b.status === "planned") {
+      const opt = buildOptions[b.kind];
+      stateLine = opt && opt.can
+        ? '<button class="btn small" data-build="' + esc(b.kind) + '">Raise it · ' + opt.cost + " materials</button>"
+        : '<span class="note">' + esc(opt ? opt.reason : "") + "</span>";
+    } else if (b.status === "building") {
+      stateLine = '<div class="project-progress"><span style="width:' + Math.round((b.progress / b.workNeeded) * 100) + '%"></span></div>' +
+        '<span class="note">rising · ' + Math.round(b.progress) + "/" + b.workNeeded + "</span>";
+    } else if (b.status === "damaged") {
+      stateLine = '<span class="camp-damaged">damaged · condition ' + b.condition + " — crews will mend it</span>";
+    } else {
+      stateLine = '<span class="note">condition ' + b.condition + "</span>";
+    }
+    void full;
+    return '<div class="camp-building"><div class="camp-b-head"><span class="camp-b-name">' + esc(b.name) +
+      '</span><span class="camp-b-state">' + esc(b.status) + "</span></div>" +
+      '<div class="camp-b-body">' + stateLine + "</div>" +
+      '<div class="camp-crew">' + crewChips + staffRow + "</div></div>";
+  }).join("");
+  const acts = settlementActOptions(world).map(o =>
+    '<button class="hand-act' + (o.enabled ? "" : " disabled") + '" data-camp-act="' + esc(o.kind) + '"' +
+    (o.enabled ? "" : " disabled") + ' title="' + esc(o.blurb) + '">' +
+    '<span class="ha-top"><span class="ha-name" style="color:' + esc(o.color) + '">' + esc(o.name) + "</span>" +
+    '<span class="ha-cost">' + o.cost + " influence</span></span>" +
+    '<span class="ha-why">' + esc(o.enabled ? o.blurb : o.reason) + "</span></button>"
+  ).join("");
+  const daily = s.lastDaily
+    ? '<p class="note camp-daily">Yesterday: made ' + s.lastDaily.foodProduced + " food / " +
+      s.lastDaily.materialsProduced + " materials, ate " + s.lastDaily.foodConsumed +
+      (s.lastDaily.fed ? "" : " — and went hungry") +
+      (s.lastDaily.exposedKinds.length ? " · an exposed secret hung over the " + esc(s.lastDaily.exposedKinds.join(", ")) : "") +
+      (s.lastDaily.mourningHands ? " · " + s.lastDaily.mourningHands + " mourning hand" + (s.lastDaily.mourningHands === 1 ? "" : "s") + " on the crews" : "") +
+      "</p>"
+    : "";
+  el.innerHTML =
+    '<div class="camp-head"><p class="eyebrow">The camp · ' + esc(s.level) + "</p>" +
+    '<span class="camp-stores">🍞 ' + s.food + " food (" + s.foodDays + 'd) · 🪵 ' + s.materials + " materials · " +
+    s.population + ' minds · ' + Math.round(world.charter?.influence ?? 0) + " influence</span></div>" +
+    '<div class="camp-hold"><span>Hold</span><div class="camp-hold-bar' + holdCls + '"><span style="width:' +
+      Math.max(0, Math.min(100, s.hold)) + '%"></span></div><b>' + Math.round(s.hold) + "</b></div>" +
+    '<p class="note camp-wall">North Wall level ' + s.wall.level + " · condition " + Math.round(s.wall.condition) +
+      " · defence " + s.defense + " · " + esc(forecast + lastStorm) + "</p>" +
+    daily +
+    '<div class="camp-buildings">' + buildingRows + "</div>" +
+    '<p class="eyebrow camp-acts-head">Your hand on the camp — the same influence as every blessing</p>' +
+    '<div class="hand-acts">' + acts + "</div>";
+}
+
+/** Found the next run after a collapse, carrying the legacy forward. */
+function foundNextCamp() {
+  const boons = world.settlement?.legacy?.boons || [];
+  world = freshWorld();
+  activateSettlement(world, { boons });
+  chats = {};
+  ui = { selectedId: null, chatId: null, record: ui.record, threadKind: "mind", threadTarget: null };
+  mapFx.fxInit = false;
+  lastSeenAt = Date.now();
+  lastSeenTick = null;
+  stopReplay();
+  runTicks(world, OPENING_TICKS);
+  settleMoments(world.pending.slice());
+  save(); syncTickPace(); renderAll();
+  showPicker();
+  toast(boons.length
+    ? "A new camp, founded on what the last one earned: " + esc(boons.join(", ").replace(/_/g, " ")) + "."
+    : "A new camp. The old one's story stays in the record it left.");
 }
 
 function keeperPanelHtml() {
@@ -4094,7 +4229,7 @@ function renderAdminWorld() {
 function renderAll() {
   credit("day", world.clock.day);
   renderKeeperStrip();
-  renderNow(); renderWant(); renderHand(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
+  renderNow(); renderWant(); renderHand(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderCamp(); renderFeed();
   renderToday();
   renderTimeline();
   // The director reads the world after it has been drawn, so the pace and the
@@ -4178,6 +4313,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const previouslySeen = fresh ? null : digestMark(world);
     sameServedWorld = !fresh && world.seed === serviceWorld.seed;
     world = serviceWorld;
+    if (!world.config.settlement?.enabled) activateSettlement(world);
     serviceMode = true;
     serviceLost = false;
     mapFx.fxInit = false;
@@ -4315,6 +4451,42 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("more-feed").addEventListener("click", () => { switchTab("record"); ui.record = "feed"; renderRecord(); });
   $("beat-banner").addEventListener("click", () => { if (replay) skipReplay(); else hideBeat(); });
   $("keeper-strip").addEventListener("click", () => { ui.record = "keeper"; save(); switchTab("record"); });
+  $("camp-card").addEventListener("click", ev => {
+    const target = /** @type {HTMLElement|null} */ (ev.target);
+    const actBtn = target?.closest("[data-camp-act]");
+    if (actBtn) {
+      const kind = /** @type {any} */ (actBtn).dataset.campAct;
+      const result = performSettlementAct(world, kind);
+      toast(result.ok ? esc(result.effect || "It is done.") : (result.reason || "You cannot do that."));
+      save(); renderAll();
+      return;
+    }
+    const buildBtn = target?.closest("[data-build]");
+    if (buildBtn) {
+      const result = startConstruction(world, /** @type {any} */ (buildBtn).dataset.build);
+      toast(result.ok ? "Work begins. Hands and days will do the rest." : (result.reason || "You cannot build that."));
+      save(); renderAll();
+      return;
+    }
+    const assignBtn = target?.closest("[data-assign]");
+    if (assignBtn) {
+      const buildingId = /** @type {any} */ (assignBtn).dataset.assign;
+      const select = document.querySelector('.camp-staff-select[data-for="' + buildingId + '"]');
+      const agentId = select ? /** @type {HTMLSelectElement} */ (select).value : null;
+      const result = agentId ? assignCrew(world, buildingId, agentId) : { ok: false, reason: "Choose a mind first." };
+      if (!result.ok) toast(result.reason || "They cannot staff that.");
+      save(); renderAll();
+      return;
+    }
+    const unassignBtn = target?.closest("[data-unassign]");
+    if (unassignBtn) {
+      const el = /** @type {any} */ (unassignBtn);
+      unassignCrew(world, el.dataset.unassign, el.dataset.agent);
+      save(); renderAll();
+      return;
+    }
+    if (target?.closest("[data-new-camp]")) { foundNextCamp(); return; }
+  });
   $("hand-card").addEventListener("click", ev => {
     const btn = /** @type {HTMLElement|null} */ (ev.target)?.closest(".hand-act");
     const kind = /** @type {HTMLElement|null} */ (btn)?.dataset.act;

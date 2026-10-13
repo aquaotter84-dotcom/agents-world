@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { createWorld, deserializeWorld, serializeWorld } from "../engine/index.js";
+import { createWorld, deserializeWorld, serializeWorld, activateSettlement } from "../engine/index.js";
 
 /**
  * Write the world atomically. Returns false (and complains) rather than
@@ -41,12 +41,15 @@ export function loadOrCreateWorld({ savePath, seed = 1, fresh = false, log = () 
   if (!fresh && existsSync(savePath)) {
     try {
       const world = deserializeWorld(readFileSync(savePath, "utf8"));
+      // The hosted world is the game mode too: a save from before the camp
+      // existed is founded on load rather than left dormant forever.
+      if (!world.config.settlement?.enabled) activateSettlement(world);
       return { world, resumed: true };
     } catch (err) {
       log(`Could not read ${savePath} (${err instanceof Error ? err.message : err}) — starting a new world.`);
     }
   }
-  return { world: createWorld({ seed }), resumed: false };
+  return { world: createWorld({ seed, config: /** @type {any} */ ({ settlement: { enabled: true } }) }), resumed: false };
 }
 
 /** @param {unknown} v */

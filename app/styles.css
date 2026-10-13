@@ -810,3 +810,25 @@ body.watching #today-line { font-size: 13px; }
   font-size: 9px; letter-spacing: 1.4px; text-transform: uppercase;
   color: rgba(167, 139, 250, 0.75);
 }
+
+/* Phase F: the camp card */
+.camp-head, .camp-b-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.camp-stores { color: #c9c9d4; font-size: .85em; }
+.camp-hold { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; }
+.camp-hold-bar { flex: 1; height: 8px; background: #28242a; border-radius: 999px; overflow: hidden; }
+.camp-hold-bar span { display: block; height: 100%; background: linear-gradient(90deg, #7d9b6a, #a7c796); transition: width .3s ease; }
+.camp-hold-bar.mid span { background: linear-gradient(90deg, #9a6d2d, #fbbf24); }
+.camp-hold-bar.low span { background: linear-gradient(90deg, #8a3030, #f87171); }
+.camp-wall, .camp-daily { margin: 4px 0; }
+.camp-buildings { display: grid; gap: 8px; margin: 10px 0; }
+.camp-building { border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 8px 10px; }
+.camp-b-name { font-weight: 700; }
+.camp-b-state { color: #9a9aa8; font-size: .85em; text-transform: capitalize; }
+.camp-crew { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.camp-crew-chip { background: rgba(255,255,255,.07); border-radius: 999px; padding: 2px 6px 2px 10px; font-size: .85em; }
+.camp-x { background: none; border: none; color: #f87171; cursor: pointer; padding: 0 2px; }
+.camp-staff { display: inline-flex; gap: 6px; align-items: center; }
+.camp-staff-select { background: #1c1a20; color: #e8e6df; border: 1px solid rgba(255,255,255,.15); border-radius: 8px; padding: 4px; }
+.camp-damaged { color: #fca5a5; }
+.camp-acts-head { margin-top: 10px; }
+.camp-legacy { color: #f3e9d2; line-height: 1.5; }
