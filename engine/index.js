@@ -28,7 +28,7 @@ export { createMourning, normalizeMourning, pendingFunerals, recentMemorials, bu
 export { createDivine, normalizeDivine, INTERVENTION_KINDS, INTERVENTION_CAP, liveInterventions, markedInterventions, interventionById, liveOmenForRegion, liveBlessingForAgent, liveBlessingForWork, recordIntervention } from "./model/divine.js";
 export { ruleOnPetition, resolveDilemma, actOnWhisper, settleCharter, describeRule } from "./systems/charter.js";
 export { settleWant, wantReading, shiftWant, keeperAct, noteAsk, quietState, wantSummary } from "./systems/want.js";
-export { settleSettlement, activateSettlement, settlementSummary, constructionOptions, canConstruct, startConstruction, staffingBlock, assignCrew, unassignCrew, applySettlementWork, resolveStorm, settlementActOptions, canPerformSettlementAct, performSettlementAct, SETTLEMENT_ACT_INFO } from "./systems/settlement.js";
+export { settleSettlement, activateSettlement, settlementSummary, constructionOptions, canConstruct, startConstruction, staffingBlock, assignCrew, unassignCrew, applySettlementWork, resolveStorm, settlementActOptions, canPerformSettlementAct, performSettlementAct, SETTLEMENT_ACT_INFO, collapseSettlement } from "./systems/settlement.js";
 export { settleMourning, callFuneral, mournDeparture, deedsOf } from "./systems/mourning.js";
 export { settleDivine, performIntervention, canIntervene, interventionOptions, interventionOption, recentInterventions, liveSigns, interventionFor, resolveTarget, INTERVENTION_INFO } from "./systems/divine.js";
 export { APPROACH_METHODS, availableMethods, validateApproach, resolveApproach, proposalEligible } from "./decision/proposals.js";

@@ -214,7 +214,9 @@ function settleOneDay(world, day) {
   if (memorial && (memorial.status === "active" || memorial.status === "damaged")) holdDelta += cfg.holdMemorialPerDay;
   const holdBefore = s.hold;
   s.hold = clamp(s.hold + holdDelta, 0, 100);
-  if (s.hold <= 0) s.lowHoldDays += 1; else s.lowHoldDays = 0;
+  // A day that *began* at zero Hold counts toward the ending, even if the
+  // day itself went well: will is measured by where the camp woke up.
+  if (holdBefore <= 0) s.lowHoldDays += 1; else if (s.hold > 0) s.lowHoldDays = 0;
   if (holdBefore > 25 && s.hold <= 25) {
     logEvent(world, {
       kind: "settlement",
@@ -269,6 +271,14 @@ function settleOneDay(world, day) {
         : `What everybody now knows hung over ${exposedKinds.join(" and ")} all day, and the work showed it.`,
       significance: !fed ? 0.72 : 0.55
     });
+  }
+  /* ---- the ending, when the day has made it unavoidable ---- */
+  if (pop < cfg.minPopulation) {
+    collapseSettlement(world, "too few remained to be a camp");
+  } else if (s.starvingDays >= cfg.starveCollapseDays) {
+    collapseSettlement(world, `starvation — the stores stood empty for ${s.starvingDays} days`);
+  } else if (s.lowHoldDays >= cfg.collapseGraceDays) {
+    collapseSettlement(world, "the Hold gave out — nobody believed the camp would stay together, so it did not");
   }
 }
 
@@ -812,4 +822,70 @@ export function performSettlementAct(world, kind, target) {
     significance: 0.7
   });
   return { ok: true, kind, cost: check.cost, effect };
+}
+
+/* ------------------------------------------------------------------ *
+ * Collapse, and what carries over. An ending, not a crash: the camp
+ * scatters for a stated reason, the chronicle closes its story, and
+ * the legacy it earned becomes boons the next run starts with.
+ * ------------------------------------------------------------------ */
+
+/**
+ * End the camp. Idempotent: a collapsed camp cannot collapse twice.
+ * @param {World} world
+ * @param {string} cause
+ * @returns {import("../model/settlement.js").SettlementLegacy|null}
+ */
+export function collapseSettlement(world, cause) {
+  const s = world.settlement;
+  if (!s || s.status === "collapsed") return s?.legacy ?? null;
+  const cfg = world.config.settlement;
+  s.status = "collapsed";
+  s.collapseCause = cause;
+  s.collapsedTick = world.clock.tick;
+
+  /** @type {string[]} */
+  const boons = [];
+  if (s.stats.daysSurvived >= 8) boons.push("seasoned_stores");
+  if (s.wall.level >= 2) boons.push("wall_craft");
+  if (s.stats.buildingsBuilt.includes("memorial")) boons.push("remembered_names");
+  if (s.stats.peakLevelIndex >= 2) boons.push("town_charter");
+
+  const levelNames = ["camp", "hamlet", "town"];
+  const builtNames = s.stats.buildingsBuilt.map(kind => buildingByKind(s, kind)?.name || kind);
+  const summary =
+    `The ${levelNames[s.stats.peakLevelIndex]} ended on day ${world.clock.day}, ${cause}. ` +
+    `It kept ${s.stats.peakPopulation} minds at its fullest, answered ${s.stats.stormsWeathered} storm${s.stats.stormsWeathered === 1 ? "" : "s"}, ` +
+    `and raised ${builtNames.length ? builtNames.join(", ") : "nothing that stood"} behind a wall at level ${s.wall.level}. ` +
+    (boons.length
+      ? `What carries over: ${boons.map(b => LEGACY_BOONS[b].name.toLowerCase()).join(", ")}.`
+      : "It left nothing behind but the record.");
+
+  /** @type {import("../model/settlement.js").SettlementLegacy} */
+  const legacy = {
+    cause,
+    tick: world.clock.tick,
+    day: world.clock.day,
+    daysSurvived: s.stats.daysSurvived,
+    peakLevel: ["Camp", "Hamlet", "Town"][s.stats.peakLevelIndex],
+    peakPopulation: s.stats.peakPopulation,
+    wallLevel: s.wall.level,
+    stormsWeathered: s.stats.stormsWeathered,
+    buildingsBuilt: [...s.stats.buildingsBuilt],
+    boons,
+    summary
+  };
+  s.legacy = legacy;
+
+  // No chronicle entry is forged here: the collapse event below carries
+  // the maximum significance, so the day's own chronicle — written by the
+  // same code as every other day — closes the camp's story itself.
+  keeperAct(world, `the camp scattered: ${cause}`, cfg.collapseWant);
+  logEvent(world, {
+    kind: "collapse",
+    agentId: null,
+    text: `The camp has scattered — ${cause}. The minds are still here, and the world still turns, but the place they were building together is over. ${boons.length ? "What it earned goes with whoever founds the next one." : ""}`.trim(),
+    significance: 1
+  });
+  return legacy;
 }

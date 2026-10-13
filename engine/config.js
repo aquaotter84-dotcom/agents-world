@@ -749,6 +749,9 @@ export const DEFAULT_CONFIG = {
       rally: { harmony: 3, legacy: 1 }
     },
 
+    /** What the ending itself does to the keeper's own meters. */
+    collapseWant: { legacy: 3, harmony: -6 },
+
     /** Work one build/repair act puts in, before social factors. */
     buildWorkBase: 10,
     buildWorkPerFocus: 0.05
