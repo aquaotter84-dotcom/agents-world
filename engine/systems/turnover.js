@@ -20,6 +20,7 @@ import { logEvent } from "../model/events.js";
 import { phrase } from "../decision/prose.js";
 import { WANDERERS, BACKSTORIES } from "../content.js";
 import { callFuneral, mournDeparture } from "./mourning.js";
+import { settlementActive, foodDays } from "../model/settlement.js";
 
 /**
  * Minds the world may not take on its own: the seed cast and the keeper's own
@@ -54,7 +55,11 @@ export function settleTurnover(world) {
 
   if (tick - (world.lastArrivalTick ?? -9999) >= cfg.arrivalIntervalTicks) {
     world.lastArrivalTick = tick;
-    if (living.length < cfg.maxCast && world.rng.chance(cfg.arrivalChance)) {
+    // A camp that cannot feed the minds it has does not gain another
+    // mouth: in the base game, arrivals respect the stores. (Game mode
+    // only; a dormant settlement changes nothing here, not even a draw.)
+    const campFull = settlementActive(world) && foodDays(world) < 2.5;
+    if (!campFull && living.length < cfg.maxCast && world.rng.chance(cfg.arrivalChance)) {
       arrive(world);
     }
   }

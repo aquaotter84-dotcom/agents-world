@@ -432,7 +432,9 @@ test("coming back to a world that ran on replays what was missed", async () => {
 test("a model can write the conversations again, and the record is not touched", async () => {
   const { createWorld, runTicks, serializeWorld } = await import("../engine/index.js");
   const { logEvent } = await import("../engine/model/events.js");
-  const world = createWorld({ seed: 42 });
+  // A game-mode world, as the app now founds them: the camp is part of
+  // this world from its first tick, not switched on at load.
+  const world = createWorld({ seed: 42, config: /** @type {any} */ ({ settlement: { enabled: true } }) });
   runTicks(world, 240);
   // No moments this tick: the only call the app should make is the retelling.
   world.config.moments.maxPerTick = 0;

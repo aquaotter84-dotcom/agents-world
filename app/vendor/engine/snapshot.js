@@ -17,6 +17,7 @@ import { normalizeCharter } from "./model/charter.js";
 import { normalizeWant } from "./model/want.js";
 import { normalizeMourning } from "./model/mourning.js";
 import { normalizeDivine } from "./model/divine.js";
+import { normalizeSettlement } from "./model/settlement.js";
 import { createCognitionState, createProposalState } from "./model/agent.js";
 
 /**
@@ -43,6 +44,9 @@ const PERSISTED = [
   // Signs the keeper has already set: which targets are lit, which regions are
   // under an omen, and how long each has left to bite.
   "divine",
+  // The camp: stores, crews, the wall as a levelled defence, the Hold and
+  // the legacy of a collapsed run. Persisted so a camp survives a save.
+  "settlement",
   "pending",
   "resolved",
   "chronicle",
@@ -109,6 +113,8 @@ export function deserializeWorld(input) {
   // A world saved before the keeper had any way to be felt has never been
   // visited — no signs, no cooldowns, nothing to expire.
   world.divine = normalizeDivine(data.divine);
+  // A world saved before there was a camp gets a fresh, dormant one.
+  world.settlement = normalizeSettlement(data.settlement, world.config);
   const pilotCount = Math.max(0, Math.floor(world.config.cognition.pilotCount));
   const interval = Math.max(1, world.config.cognition.planIntervalTicks);
   for (let index = 0; index < world.agents.length; index += 1) {

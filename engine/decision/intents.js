@@ -21,6 +21,7 @@ import { recallingSecretBurden, strongestBurden } from "./burden.js";
 import { activeRitual } from "../systems/rituals.js";
 import { liveOmenForRegion } from "../model/divine.js";
 import { regionName } from "../model/world.js";
+import { settlementActive, buildingDef, crewConflict, foodDays } from "../model/settlement.js";
 
 /**
  * @typedef {object} Intent
@@ -482,6 +483,12 @@ export function generateIntents(world, agent) {
         score += 18;
         reasons.push("this work serves a priority of theirs");
       }
+      if (settlementActive(world) && foodDays(world) < 3) {
+        // In the base game the wall competes with dinner, and dinner wins
+        // while the stores are low: hands belong on the fields first.
+        score -= 18;
+        reasons.push("the camp needs food before stone");
+      }
       if (agent.regionId === project.regionId) {
         score += 7;
         reasons.push("already at the North Wall");
@@ -524,6 +531,53 @@ export function generateIntents(world, agent) {
           add("project_interfere", rivalBuilder.other.id, interfereScore, reasons, {});
         }
       }
+    }
+  }
+
+  /* ---------- The camp: staff it, build it, mend it ---------- */
+  if (settlementActive(world)) {
+    const scfg = cfg.settlement;
+    const days = foodDays(world);
+    for (const building of world.settlement.buildings) {
+      const def = buildingDef(cfg, building.kind);
+      if (!def) continue;
+      if (building.status === "building") {
+        add("settlement_build", null, 40 + agent.drives.focus * 0.08,
+          [`${building.name} is rising and wants hands`], { payload: { buildingId: building.id } });
+        continue;
+      }
+      if (building.status === "damaged") {
+        const repairCost = Math.ceil(def.cost / 2);
+        if (building.repairPaid || world.settlement.stores.materials >= repairCost) {
+          add("settlement_repair", null, 48,
+            [`${building.name} is storm-broken and wants mending`], { payload: { buildingId: building.id } });
+        }
+        continue;
+      }
+      if (building.status !== "active") continue;
+      const mine = building.crew.includes(agent.id);
+      if (!mine && building.crew.length >= def.maxCrew) continue;
+      if (!mine && crewConflict(world, building, agent.id)) continue;
+      if (def.produces === "food") {
+        let score = days < 1.5 ? 56 : days < 3 ? 42 : days < 5 ? 30 : 20;
+        if (mine) score = Math.max(score, 27);
+        add("settlement_work", null, score + agent.drives.focus * 0.05,
+          [days < 3 ? "the stores will not feed the camp for long" : `${building.name} wants hands`],
+          { payload: { buildingId: building.id } });
+      } else if (def.produces === "materials") {
+        const buildingWanted = world.settlement.buildings.some(b => b.status === "planned" || b.status === "building");
+        let score = world.settlement.stores.materials < 8 ? 38 : buildingWanted ? 34 : 19;
+        if (mine) score = Math.max(score, 25);
+        add("settlement_work", null, score + agent.drives.creativity * 0.04,
+          ["the camp builds with what the workshop makes"], { payload: { buildingId: building.id } });
+      } else if (building.kind === "hall") {
+        add("settlement_work", null, mine ? 22 : 24,
+          ["a staffed hall shelters more than an empty one"], { payload: { buildingId: building.id } });
+      }
+    }
+    if (world.settlement.wall.condition < 75) {
+      add("settlement_repair", null, 46, ["the North Wall is worn and wants mending"],
+        { payload: { buildingId: "wall" } });
     }
   }
 

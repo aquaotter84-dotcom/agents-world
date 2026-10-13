@@ -36,6 +36,7 @@ import { trackFeuds } from "./systems/vendetta.js";
 import { settleMemory } from "./systems/memory.js";
 import { settleChat } from "./systems/chat-influence.js";
 import { settleWant, noteAsk } from "./systems/want.js";
+import { settleSettlement } from "./systems/settlement.js";
 import { logEvent } from "./model/events.js";
 import { phrase, momentLine } from "./decision/prose.js";
 import { agentById, livingAgents, regionName } from "./model/world.js";
@@ -217,6 +218,9 @@ export function step(world) {
   // keeper's score for this tick is a fact about the world as it now stands
   // rather than about the world as it stood when the tick began.
   settleWant(world);
+  // The camp's daily ledger closes inside this call on day boundaries;
+  // dormant worlds return immediately and pay nothing for its presence.
+  settleSettlement(world);
   maybeChronicle(world, tick);
 
   // Everything logged this tick, oldest first, so a reader sees the tick unfold.

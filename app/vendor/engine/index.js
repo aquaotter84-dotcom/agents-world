@@ -28,11 +28,13 @@ export { createMourning, normalizeMourning, pendingFunerals, recentMemorials, bu
 export { createDivine, normalizeDivine, INTERVENTION_KINDS, INTERVENTION_CAP, liveInterventions, markedInterventions, interventionById, liveOmenForRegion, liveBlessingForAgent, liveBlessingForWork, recordIntervention } from "./model/divine.js";
 export { ruleOnPetition, resolveDilemma, actOnWhisper, settleCharter, describeRule } from "./systems/charter.js";
 export { settleWant, wantReading, shiftWant, keeperAct, noteAsk, quietState, wantSummary } from "./systems/want.js";
+export { settleSettlement, activateSettlement, settlementSummary, constructionOptions, canConstruct, startConstruction, staffingBlock, assignCrew, unassignCrew, applySettlementWork, resolveStorm, settlementActOptions, canPerformSettlementAct, performSettlementAct, SETTLEMENT_ACT_INFO, collapseSettlement } from "./systems/settlement.js";
 export { settleMourning, callFuneral, mournDeparture, deedsOf } from "./systems/mourning.js";
 export { settleDivine, performIntervention, canIntervene, interventionOptions, interventionOption, recentInterventions, liveSigns, interventionFor, resolveTarget, INTERVENTION_INFO } from "./systems/divine.js";
 export { APPROACH_METHODS, availableMethods, validateApproach, resolveApproach, proposalEligible } from "./decision/proposals.js";
 export { petitionableRules, petitionEligible, validatePetition, whisperable, whisperEligible, openDilemma, dilemmaChoices } from "./decision/petitions.js";
 export { serializeWorld, deserializeWorld, forkWorld } from "./snapshot.js";
+export { createSettlement, normalizeSettlement, buildingByKind, buildingById, buildingDef, settlementEnabled, settlementActive, foodDays, settlementLevelFor, stormStrengthFor, stormForecast, wallDefense, shelterScore, defenseScore, isMourning, crewConflict, crewFeudWarning, buildingExposed, buildingOutputFactor, workFactorFor, legacyBoonsOf, SETTLEMENT_LEVELS, LEGACY_BOONS } from "./model/settlement.js";
 
 /* ---- advancement ---- */
 export { step, resolveMoment, expireMoments, runTicks, describeWorld, sanitize, buildCognitionMoment } from "./simulation.js";
