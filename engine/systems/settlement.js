@@ -208,6 +208,10 @@ function settleOneDay(world, day) {
   holdDelta += vendettas * cfg.holdPerVendettaPerDay;
   s.hold = clamp(s.hold + holdDelta, 0, 100);
 
+  // Storm season keeps its forecast appointment at the close of the day:
+  // the ledger above is the day the camp had, this is the night it gets.
+  if (day - 1 >= s.storm.nextStormDay) resolveStorm(world);
+
   s.lastDaily = {
     day: day - 1,
     foodProduced: Math.round(foodProduced * 10) / 10,
@@ -515,4 +519,74 @@ function completeBuilding(world, building) {
     significance: 0.8,
     regionId: building.regionId
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Storm season: on a forecast clock, answered by the wall and shelter.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Resolve the storm that is due, right now. Deterministic: strength is
+ * calendar arithmetic (see stormStrengthFor), defence is the wall's
+ * level and condition plus shelter, and the margin between them is the
+ * whole outcome — damage and shelter margin are the same number read
+ * two ways. Exported so tests and the keeper's forecast can meet the
+ * exact storm the camp will meet.
+ * @param {World} world
+ * @returns {{strength: number, defense: number, margin: number, outcome: string}|null}
+ */
+export function resolveStorm(world) {
+  if (!settlementActive(world)) return null;
+  const cfg = world.config.settlement;
+  const s = world.settlement;
+  const strength = stormStrengthFor(world.config, s.storm.index);
+  const defense = defenseScore(world);
+  const margin = Math.round((defense - strength) * 10) / 10;
+  const outcome = margin >= cfg.stormHeldMargin ? "held" : margin >= -cfg.stormHeldMargin ? "weathered" : "breached";
+
+  if (outcome !== "held") {
+    const shortfall = Math.max(0, -margin);
+    const buildingDamage = outcome === "weathered" && margin >= 0 ? 3 : shortfall * cfg.stormDamagePerShortfall;
+    const wallDamage = (outcome === "weathered" && margin >= 0 ? 2 : shortfall * cfg.stormWallDamagePerShortfall)
+      + (outcome === "breached" ? 5 : 0);
+    s.wall.condition = clamp(s.wall.condition - wallDamage, 0, 100);
+    for (const building of s.buildings) {
+      if (building.status === "building" && outcome === "breached") {
+        building.progress = Math.round(building.progress * 0.7);
+        continue;
+      }
+      if (building.status !== "active" && building.status !== "damaged") continue;
+      building.condition = clamp(building.condition - buildingDamage, 0, 100);
+      if (building.condition < 60 && building.status === "active") {
+        building.status = "damaged";
+        building.progress = 0;
+        building.repairPaid = false;
+      }
+    }
+    if (outcome === "breached") {
+      s.stores.food = Math.round(s.stores.food * (1 - cfg.stormFoodLossShare) * 10) / 10;
+    }
+  }
+
+  const holdDelta = outcome === "held" ? cfg.holdStormHeld : outcome === "weathered" ? cfg.holdStormWeathered : cfg.holdStormBreached;
+  s.hold = clamp(s.hold + holdDelta, 0, 100);
+  s.storm.lastStormDay = world.clock.day;
+  s.storm.lastMargin = margin;
+  s.storm.lastOutcome = outcome;
+  s.storm.stormsHit += 1;
+  s.storm.index += 1;
+  s.storm.nextStormDay += cfg.stormIntervalDays;
+  if (outcome !== "breached") s.stats.stormsWeathered += 1;
+
+  logEvent(world, {
+    kind: "storm",
+    agentId: null,
+    text: outcome === "held"
+      ? `The storm came on day ${world.clock.day} at strength ${strength}, and the camp answered it with ${Math.round(defense)} — the wall held, and everybody heard it hold.`
+      : outcome === "weathered"
+        ? `The storm came on day ${world.clock.day} at strength ${strength} against the camp's ${Math.round(defense)}. It weathered the night, and woke to repairs.`
+        : `The storm came on day ${world.clock.day} at strength ${strength}, and the camp's ${Math.round(defense)} was not enough. It breached — stores spoiled, roofs torn, the wall worried raw.`,
+    significance: outcome === "breached" ? 0.92 : 0.82
+  });
+  return { strength, defense, margin, outcome };
 }

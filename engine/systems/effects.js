@@ -22,6 +22,7 @@ import { ruleStrength } from "../model/charter.js";
 import { liveBlessingForAgent, liveBlessingForWork } from "../model/divine.js";
 import { recordWallRaised } from "./charter.js";
 import { applySettlementWork } from "./settlement.js";
+import { settlementEnabled } from "../model/settlement.js";
 
 /**
  * @typedef {{op: string} & Record<string, any>} EffectOp
@@ -120,6 +121,20 @@ function completeNorthWall(world, tick) {
   // later petition is measured against.
   recordWallRaised(world, ids);
 
+  if (settlementEnabled(world)) {
+    // Re-completion: the wall standing is level 1, not the end of the game.
+    // The project reopens for the next level, higher and slower, and the
+    // wall's condition is made whole by the finishing hands.
+    const wall = world.settlement.wall;
+    wall.level += 1;
+    wall.condition = 100;
+    wall.reinforcements = Math.max(0, wall.level - 1);
+    project.status = "active";
+    project.progress = 0;
+    project.completedTick = tick;
+    for (const milestone of project.milestones) { milestone.reached = false; milestone.tick = null; }
+  }
+
   // Work done side by side leaves a durable mark on how the builders regard
   // one another; the project is not just a progress bar with a completion text.
   for (let i = 0; i < ids.length; i++) {
@@ -171,7 +186,15 @@ function applyProjectWork(world, op, tick) {
   const bonus =
     (1 + ruleStrength(world.charter, "wall_first") * 0.15) *
     (blessed ? 1 + world.config.divine.blessingWorkBonus : 1);
-  const amount = clamp(Math.round((Number(op.amount) || 0) * bonus), 1, 24);
+  let workAmount = (Number(op.amount) || 0) * bonus;
+  if (settlementEnabled(world)) {
+    // In the base game the wall is not a day-one errand: food, materials and
+    // building compete for the same hands, and wall work itself goes less
+    // far per level already raised. Level 1 is the start, not the ending.
+    const scfg = world.config.settlement;
+    workAmount = workAmount * scfg.wallWorkScale / (1 + world.settlement.wall.level * scfg.wallLevelWorkGrowth);
+  }
+  const amount = clamp(Math.round(workAmount), 1, 24);
   const record = project.contributors[actor.id] || (project.contributors[actor.id] = {
     work: 0, help: 0, interference: 0, lastTick: tick
   });
