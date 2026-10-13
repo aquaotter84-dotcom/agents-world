@@ -712,6 +712,10 @@ export const DEFAULT_CONFIG = {
     /** Population bounds for the base game. */
     minPopulation: 4,
     maxPopulation: 14,
+    /** In a fed, holding camp a wanderer may join this often (world days),
+     * and a starving or broken one loses its most adrift unprotected mind. */
+    arrivalIntervalDays: 3,
+    departureHoldBelow: 18,
 
     /** Social strategy, as numbers: what a mind's state does to the work. */
     secretExposureFactor: 0.45,

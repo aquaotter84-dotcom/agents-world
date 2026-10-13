@@ -30,6 +30,8 @@ import {
   buildingOutputFactor, workFactorFor, isMourning, legacyBoonsOf, LEGACY_BOONS
 } from "../model/settlement.js";
 import { keeperAct } from "./want.js";
+import { arrive } from "./turnover.js";
+import { mournDeparture } from "./mourning.js";
 
 /**
  * @typedef {import("../model/world.js").World} World
@@ -206,7 +208,22 @@ function settleOneDay(world, day) {
     }
   }
   holdDelta += vendettas * cfg.holdPerVendettaPerDay;
+  const hall = buildingByKind(s, "hall");
+  if (hall && hall.status === "active" && hall.crew.length) holdDelta += cfg.holdHallStaffedPerDay;
+  const memorial = buildingByKind(s, "memorial");
+  if (memorial && (memorial.status === "active" || memorial.status === "damaged")) holdDelta += cfg.holdMemorialPerDay;
+  const holdBefore = s.hold;
   s.hold = clamp(s.hold + holdDelta, 0, 100);
+  if (s.hold <= 0) s.lowHoldDays += 1; else s.lowHoldDays = 0;
+  if (holdBefore > 25 && s.hold <= 25) {
+    logEvent(world, {
+      kind: "settlement",
+      agentId: null,
+      text: `The Hold is failing: at ${Math.round(s.hold)} the camp is a few bad days from scattering. Food, shelter, or the keeper's hand — something has to give.`,
+      significance: 0.78
+    });
+  }
+  settlePopulation(world, pop);
 
   // Storm season keeps its forecast appointment at the close of the day:
   // the ledger above is the day the camp had, this is the night it gets.
@@ -589,4 +606,42 @@ export function resolveStorm(world) {
     significance: outcome === "breached" ? 0.92 : 0.82
   });
   return { strength, defense, margin, outcome };
+}
+
+/**
+ * Population bounds for the base game, settled daily and without drama:
+ * a fed, holding camp under its cap may gain a wanderer (through the
+ * turnover system's own arrival, protected cast untouched), and a
+ * starving or broken camp loses its most adrift unprotected mind —
+ * who is written into the mourning record like any departure.
+ * @param {World} world
+ * @param {number} pop  Population at the start of the ledger.
+ */
+function settlePopulation(world, pop) {
+  const cfg = world.config.settlement;
+  const s = world.settlement;
+  if (pop < cfg.maxPopulation && s.starvingDays === 0 && s.hold >= 55
+      && s.lastDay % cfg.arrivalIntervalDays === 0
+      && pop < world.config.turnover.maxCast) {
+    arrive(world);
+    return;
+  }
+  if (pop > cfg.minPopulation && (s.starvingDays >= 2 || s.hold < cfg.departureHoldBelow)) {
+    const candidates = livingAgents(world)
+      .filter(a => !a.seedCast && !a.userCreated)
+      .sort((a, b) => (b.adriftTicks ?? 0) - (a.adriftTicks ?? 0) || (a.id < b.id ? -1 : 1));
+    const leaving = candidates[0];
+    if (leaving) {
+      leaving.retired = true;
+      leaving.departureKind = "left";
+      logEvent(world, {
+        kind: "departure",
+        agentId: leaving.id,
+        text: `${leaving.name} left the camp in the night. A place that cannot feed or hold its people does not get to keep them.`,
+        significance: 0.66,
+        regionId: leaving.regionId
+      });
+      mournDeparture(world, leaving);
+    }
+  }
 }
