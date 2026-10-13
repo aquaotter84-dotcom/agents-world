@@ -742,6 +742,12 @@ export const DEFAULT_CONFIG = {
     rallyCost: 7,
     rallyHold: 9,
     rallyCooldownTicks: 72,
+    /** What each camp act does to the keeper's own meters. */
+    actWant: {
+      relief: { prosperity: 2, harmony: 2 },
+      repair: { prosperity: 3, harmony: 1 },
+      rally: { harmony: 3, legacy: 1 }
+    },
 
     /** Work one build/repair act puts in, before social factors. */
     buildWorkBase: 10,

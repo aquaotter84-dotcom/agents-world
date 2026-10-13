@@ -645,3 +645,171 @@ function settlePopulation(world, pop) {
     }
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Keeper acts for the camp: the influence sinks. They follow the
+ * divine pattern exactly — validate with a sentence, spend, apply,
+ * record — and they spend from the same purse as blessings and omens,
+ * which is the tradeoff at the heart of the base game: an emergency
+ * answered is a blessing not given.
+ * ------------------------------------------------------------------ */
+
+/** What each camp act is, in the keeper's own words. */
+export const SETTLEMENT_ACT_INFO = /** @type {Record<string, {name: string, verb: string, blurb: string, color: string}>} */ ({
+  relief: {
+    name: "Emergency relief", verb: "send relief",
+    blurb: "Stores appear where the camp needs them: food for the stores, and a little of the camp's will back with it.",
+    color: "#a7c796"
+  },
+  repair: {
+    name: "Emergency repair", verb: "raise emergency hands",
+    blurb: "Every sound pair of hands turns to the most broken thing — a building, or the wall itself — until it is whole or nearly.",
+    color: "#f3d9a4"
+  },
+  rally: {
+    name: "Rally the camp", verb: "rally the camp",
+    blurb: "You are seen to stand with them, and the Hold answers: the camp remembers it is one camp.",
+    color: "#c4aaf0"
+  }
+});
+
+/** @param {import("../config.js").WorldConfig["settlement"]} cfg @param {string} kind */
+function actCost(cfg, kind) {
+  if (kind === "relief") return cfg.reliefCost;
+  if (kind === "repair") return cfg.repairCost;
+  return cfg.rallyCost;
+}
+/** @param {import("../config.js").WorldConfig["settlement"]} cfg @param {string} kind */
+function actCooldown(cfg, kind) {
+  if (kind === "relief") return cfg.reliefCooldownTicks;
+  if (kind === "repair") return cfg.repairCooldownTicks;
+  return cfg.rallyCooldownTicks;
+}
+
+/**
+ * The most broken repairable thing: a damaged building, or the wall.
+ * @param {World} world
+ * @param {{buildingId?: string|null}|null|undefined} target
+ * @returns {{buildingId: string, name: string, condition: number}|null}
+ */
+function repairTarget(world, target) {
+  const s = world.settlement;
+  if (target?.buildingId) {
+    if (target.buildingId === "wall") {
+      return s.wall.condition < 100 ? { buildingId: "wall", name: "the North Wall", condition: s.wall.condition } : null;
+    }
+    const b = buildingById(s, target.buildingId);
+    return b && b.status === "damaged" ? { buildingId: b.id, name: b.name, condition: b.condition } : null;
+  }
+  /** @type {{buildingId: string, name: string, condition: number}[]} */
+  const candidates = s.buildings
+    .filter(b => b.status === "damaged")
+    .map(b => ({ buildingId: b.id, name: b.name, condition: b.condition }));
+  if (s.wall.condition < 100) candidates.push({ buildingId: "wall", name: "the North Wall", condition: s.wall.condition });
+  candidates.sort((a, b) => a.condition - b.condition);
+  return candidates[0] || null;
+}
+
+/**
+ * The camp acts with live prices, for the keeper's hand panel.
+ * @param {World} world
+ */
+export function settlementActOptions(world) {
+  const cfg = world.config.settlement;
+  return Object.keys(SETTLEMENT_ACT_INFO).map(kind => {
+    const info = SETTLEMENT_ACT_INFO[kind];
+    const check = canPerformSettlementAct(world, kind);
+    return {
+      kind, name: info.name, verb: info.verb, blurb: info.blurb, color: info.color,
+      cost: actCost(cfg, kind), enabled: check.ok, reason: check.ok ? "" : (check.reason || "")
+    };
+  });
+}
+
+/**
+ * Could the keeper do this, right now? Every refusal is a sentence.
+ * @param {World} world
+ * @param {string} kind
+ * @param {{buildingId?: string|null}|null} [target]
+ */
+export function canPerformSettlementAct(world, kind, target) {
+  const cfg = world.config.settlement;
+  if (!SETTLEMENT_ACT_INFO[kind]) return { ok: false, reason: "There is no such camp act.", cost: 0 };
+  const cost = actCost(cfg, kind);
+  if (!settlementEnabled(world)) return { ok: false, reason: "This world has no camp to act for.", cost };
+  if (world.settlement.status === "collapsed") return { ok: false, reason: "The camp has scattered. There is nothing left to spend on.", cost };
+  const tick = world.clock.tick;
+  const last = world.settlement.actLastTick[kind];
+  const cooldown = actCooldown(cfg, kind);
+  if (last !== undefined && tick - last < cooldown) {
+    const wait = cooldown - (tick - last);
+    return { ok: false, reason: `${wait} more tick${wait === 1 ? "" : "s"} before you can do that again.`, cost };
+  }
+  if (kind === "repair" && !repairTarget(world, target)) {
+    return { ok: false, reason: "Nothing is broken enough to need emergency hands.", cost };
+  }
+  if ((world.charter?.influence ?? 0) < cost) {
+    return { ok: false, reason: `That costs ${cost} influence and you have ${Math.round(world.charter?.influence ?? 0)}.`, cost };
+  }
+  return { ok: true, cost };
+}
+
+/**
+ * Do it: influence spent, camp changed, meters moved, record written.
+ * @param {World} world
+ * @param {string} kind
+ * @param {{buildingId?: string|null}|null} [target]
+ * @returns {{ok: boolean, reason?: string, kind?: string, cost?: number, effect?: string}}
+ */
+export function performSettlementAct(world, kind, target) {
+  const check = canPerformSettlementAct(world, kind, target);
+  if (!check.ok) return { ok: false, reason: check.reason };
+  const cfg = world.config.settlement;
+  const s = world.settlement;
+  const tick = world.clock.tick;
+  moveInfluence(world.charter, -check.cost);
+  s.actLastTick[kind] = tick;
+
+  let cause = "";
+  let effect = "";
+  let text = "";
+  if (kind === "relief") {
+    s.stores.food += cfg.reliefFood;
+    s.hold = clamp(s.hold + cfg.reliefHold, 0, 100);
+    cause = "you sent relief to the camp's stores";
+    effect = `the stores gain ${cfg.reliefFood} food and the Hold steadies.`;
+    text = `Relief reached the camp's stores from nowhere anybody could name, and dinner stopped being an argument.`;
+  } else if (kind === "repair") {
+    const resolved = repairTarget(world, target);
+    const name = resolved?.name || "the broken work";
+    if (resolved?.buildingId === "wall") {
+      s.wall.condition = clamp(s.wall.condition + cfg.repairCondition, 0, 100);
+    } else if (resolved) {
+      const building = buildingById(s, resolved.buildingId);
+      if (building) {
+        building.condition = clamp(building.condition + cfg.repairCondition, 0, 100);
+        if (building.condition >= 100) { building.status = "active"; building.progress = 0; building.repairPaid = true; }
+      }
+    }
+    cause = `you raised emergency hands for ${name}`;
+    effect = `${name} is ${cfg.repairCondition} condition closer to whole.`;
+    text = `Every sound pair of hands in the camp turned to ${name} at once, as if somebody had finally said the obvious thing out loud.`;
+  } else {
+    s.hold = clamp(s.hold + cfg.rallyHold, 0, 100);
+    for (const agent of livingAgents(world)) {
+      agent.moodLevel = clamp((agent.moodLevel ?? 50) + 4, 0, 100);
+    }
+    cause = "you rallied the camp";
+    effect = `the Hold rises by ${cfg.rallyHold}.`;
+    text = `The keeper stood with the camp, and the camp stood a little straighter for being stood with.`;
+  }
+
+  keeperAct(world, cause, cfg.actWant[/** @type {"relief"|"repair"|"rally"} */ (kind)] || {});
+  logEvent(world, {
+    kind: "settlement",
+    agentId: null,
+    text,
+    significance: 0.7
+  });
+  return { ok: true, kind, cost: check.cost, effect };
+}
