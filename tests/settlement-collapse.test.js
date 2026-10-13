@@ -34,7 +34,7 @@ test("starvation ends a camp, with the cause stated and the days counted", () =>
   assert.ok(world.events.some(e => e.kind === "collapse" && e.significance === 1));
   // The ending is in the day's chronicle too, through the ordinary path.
   runTicks(world, 60);
-  assert.ok(world.chronicle.some(c => /camp|stores|scattered/i.test(c.summary)) || world.events.some(e => e.kind === "chronicle"),
+  assert.ok(world.chronicle.some(c => /camp|stores|scattered/i.test(/** @type {any} */ (c).summary || "")) || world.events.some(e => e.kind === "chronicle"),
     "the chronicle carries the ending like any other day it closes");
 });
 

@@ -283,9 +283,9 @@ function settleOneDay(world, day) {
 }
 
 /**
- * Crew lists only ever hold living, present minds. Retired hands come
- * off the roster the tick they leave; feud splits join this in the
- * social wiring.
+ * Crew lists only ever hold living, present minds, and never two minds
+ * in a feud at rivalry or worse. Retired hands come off the roster the
+ * tick they leave; a feud that escalates splits its crew the same tick.
  * @param {World} world
  */
 function pruneCrews(world) {
@@ -295,6 +295,28 @@ function pruneCrews(world) {
       const a = agentById(world, id);
       return a && !a.retired;
     });
+    // A feud that reaches rivalry splits the crew it is standing in: the
+    // later hand comes off the roster, and the camp is told why its
+    // workshop just lost a worker. Who the keeper puts back — and who
+    // they move instead — is the strategy the social layer creates.
+    for (let j = 1; j < building.crew.length; j++) {
+      const candidateId = building.crew[j];
+      const conflict = crewConflict(world, building, candidateId);
+      if (!conflict) continue;
+      const candidate = agentById(world, candidateId);
+      const other = agentById(world, conflict.otherId);
+      building.crew.splice(j, 1);
+      world.settlement.crewSplitTick = world.clock.tick;
+      logEvent(world, {
+        kind: "settlement",
+        agentId: candidateId,
+        subjectId: conflict.otherId,
+        text: `${candidate?.name || "A hand"} and ${other?.name || "another hand"} can no longer staff ${building.name} together — their ${conflict.stage} saw to that. The crew is rearranged by events, and the work waits.`,
+        significance: 0.66,
+        regionId: building.regionId
+      });
+      break;
+    }
   }
 }
 
