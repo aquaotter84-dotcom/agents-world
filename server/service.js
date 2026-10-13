@@ -46,6 +46,7 @@ const args = parseArgs(process.argv.slice(2));
 const OFFLINE = Boolean(args.offline) || process.env.AGENTS_WORLD_OFFLINE === "1";
 const API_KEY = String(args.key || process.env.BLUESMINDS_API_KEY || "");
 const MODEL = String(args.model || process.env.BLUESMINDS_MODEL || "openai/gpt-oss-20b");
+const LLM_URL = String(args.url || process.env.LLM_BASE_URL || ""); // any OpenAI-compatible chat-completions endpoint
 const SEED = typeof args.seed === "string" || typeof args.seed === "number" ? args.seed : 1;
 const TICK_SECONDS = Number(args["tick-seconds"] ?? process.env.TICK_SECONDS ?? 90);
 const MAX_TICKS = args.ticks !== undefined ? Number(args.ticks) : Infinity;
@@ -61,6 +62,7 @@ const log = QUIET ? (/** @type {any[]} */ ..._parts) => {} : (/** @type {any[]} 
 const llm = new Llm({
   apiKey: OFFLINE ? "" : API_KEY,
   model: MODEL,
+  url: LLM_URL || undefined,
   log: msg => log(`  [api] ${msg}`)
 });
 const { world, resumed } = loadOrCreateWorld({
