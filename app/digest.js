@@ -23,6 +23,7 @@
  */
 
 import { WANT_METERS, WANT_LABELS } from "./vendor/engine/model/want.js";
+import { stormForecast, crewFeudWarning, foodDays, defenseScore } from "./vendor/engine/model/settlement.js";
 
 /**
  * @typedef {object} DigestMark
@@ -46,6 +47,7 @@ import { WANT_METERS, WANT_LABELS } from "./vendor/engine/model/want.js";
  * @property {number} secrets
  * @property {number} publicSecrets
  * @property {number} asksWaiting
+ * @property {{enabled: boolean, foodDays: number, hold: number, level: string, wallLevel: number, nextStormDay: number, stormDaysUntil: number, stormStrength: number, stormsHit: number, lastOutcome: string|null, damaged: string[], crewFeud: {a: string, b: string, building: string, heat: number}|null, collapsed: boolean, collapseCause: string|null}|null} settlement
  */
 
 /**
@@ -72,7 +74,33 @@ export function digestMark(world) {
       else if (heat >= 35) edgeCounts.rivalries += 1;
     }
   }
+  const settlement = (() => {
+    const s = world.settlement;
+    if (!s) return null;
+    const forecast = stormForecast(world);
+    const warning = crewFeudWarning(world);
+    return {
+      enabled: Boolean(world.config?.settlement?.enabled),
+      foodDays: Math.round(foodDays(world) * 10) / 10,
+      hold: Math.round((s.hold ?? 0) * 10) / 10,
+      level: s.level || "Camp",
+      wallLevel: s.wall?.level ?? 0,
+      nextStormDay: forecast?.nextStormDay ?? 0,
+      stormDaysUntil: forecast?.daysUntil ?? 0,
+      stormStrength: forecast?.strength ?? 0,
+      stormsHit: s.storm?.stormsHit ?? 0,
+      lastOutcome: s.storm?.lastOutcome ?? null,
+      damaged: (s.buildings || []).filter((/** @type {any} */ b) => b.status === "damaged").map((/** @type {any} */ b) => b.name),
+      crewFeud: warning ? {
+        a: nameOf(warning.aId), b: nameOf(warning.bId),
+        building: warning.building.name, heat: Math.round(warning.heat)
+      } : null,
+      collapsed: s.status === "collapsed",
+      collapseCause: s.collapseCause || null
+    };
+  })();
   return {
+    settlement,
     tick: world.clock.tick,
     day: world.clock.day,
     topSeq: world.events.length ? world.events[0].seq : 0,
@@ -119,7 +147,7 @@ export function digestMark(world) {
  * @param {DigestMark} mark   The world when the keeper left.
  * @param {import("./vendor/engine/model/world.js").World} world  The world now.
  * @param {{hours?: number|null, because?: "service"|"offline"|"manual"}} [meta]
- * @returns {{ticks: number, days: number, hours: number|null, because: string, lines: {kind: string, text: string}[], meters: {key: string, label: string, color: string, from: number, to: number, delta: number}[], quiet: {since: number, fallen: boolean}, headline: {text: string, kind: string, tick: number}|null, empty: boolean}}
+ * @returns {{ticks: number, days: number, hours: number|null, because: string, lines: {kind: string, text: string}[], meters: {key: string, label: string, color: string, from: number, to: number, delta: number}[], quiet: {since: number, fallen: boolean}, settlement: DigestMark["settlement"], headline: {text: string, kind: string, tick: number}|null, empty: boolean}}
  */
 export function awayDigest(mark, world, meta = {}) {
   const now = digestMark(world);
@@ -170,6 +198,60 @@ export function awayDigest(mark, world, meta = {}) {
     lines.push({ kind: "wall", text: `The wall went from ${Math.round(mark.wall)}% to ${Math.round(now.wall)}%.` });
   } else if (!now.wallRaised && now.wall < mark.wall) {
     lines.push({ kind: "wall", text: `The wall lost ground while you were gone: ${Math.round(mark.wall)}% to ${Math.round(now.wall)}%.` });
+  }
+
+  // The camp's stale decisions: the reason to come back at 3pm. Each of
+  // these is a decision that does not keep — if the keeper does not act,
+  // the world decides without them, and the digest says so in advance.
+  const camp = now.settlement;
+  const campBefore = mark.settlement;
+  if (camp && camp.enabled) {
+    if (camp.collapsed && !(campBefore && campBefore.collapsed)) {
+      lines.push({
+        kind: "collapse",
+        text: `The camp scattered while you were away${camp.collapseCause ? ` — ${camp.collapseCause}` : ""}. Its legacy is in the Chronicle, and it carries into whatever is founded next.`
+      });
+    } else if (!camp.collapsed) {
+      if (camp.stormsHit > (campBefore?.stormsHit ?? 0)) {
+        lines.push({
+          kind: "storm",
+          text: `A storm hit the camp while you were gone and it ${camp.lastOutcome || "was weathered"} — the Chronicle has the night's account.`
+        });
+      } else if (camp.stormDaysUntil <= 1) {
+        let defense = 0;
+        try { defense = Math.round(defenseScore(world)); } catch (e) { defense = 0; }
+        lines.push({
+          kind: "storm",
+          text: `A storm is due ${camp.stormDaysUntil === 0 ? "today" : "tomorrow"} (day ${camp.nextStormDay}) at strength ${camp.stormStrength}; the camp answers it with ${defense}. If nobody reinforces the wall or rallies the camp, it meets the storm exactly as it stands.`
+        });
+      }
+      if (camp.foodDays < 2 && (!campBefore || campBefore.foodDays >= 2 || camp.foodDays < campBefore.foodDays - 0.5)) {
+        lines.push({
+          kind: "food",
+          text: `The stores hold about ${camp.foodDays} day${camp.foodDays === 1 ? "" : "s"} of food for the camp. Nobody is coming to decide this later — the minds will eat what there is, and then they will go hungry.`
+        });
+      }
+      if (camp.crewFeud && (!campBefore || !campBefore.crewFeud
+          || campBefore.crewFeud.a !== camp.crewFeud.a || campBefore.crewFeud.b !== camp.crewFeud.b)) {
+        lines.push({
+          kind: "feud",
+          text: `${camp.crewFeud.a} and ${camp.crewFeud.b} staff ${camp.crewFeud.building} together, and their grudge is at ${camp.crewFeud.heat} — close to splitting the crew. Rearranged in time, it is a decision; left alone, the feud makes it.`
+        });
+      }
+      const newDamage = camp.damaged.filter(name => !(campBefore?.damaged || []).includes(name));
+      if (newDamage.length) {
+        lines.push({
+          kind: "building",
+          text: `${newDamage.join(", ")} ${newDamage.length === 1 ? "stands" : "stand"} damaged and unrepaired. The crew will get to it in their own order if the keeper does not.`
+        });
+      }
+      if (camp.hold < 25 && (!campBefore || campBefore.hold >= 25)) {
+        lines.push({
+          kind: "settlement",
+          text: `The camp's Hold is at ${Math.round(camp.hold)} and failing. Food, shelter, a rally — or the camp starts losing people.`
+        });
+      }
+    }
   }
 
   // What the world decided about how it lives.
@@ -262,6 +344,7 @@ export function awayDigest(mark, world, meta = {}) {
     because,
     lines,
     meters,
+    settlement: now.settlement,
     quiet: { since: now.quietSince, fallen: now.fallen },
     headline: headline ? { text: headline.text, kind: headline.kind, tick: headline.tick } : null,
     empty: lines.length === 0 && meters.every(m => Math.abs(m.delta) < 0.05)

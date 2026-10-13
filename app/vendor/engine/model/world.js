@@ -19,6 +19,7 @@ import { createCharter } from "./charter.js";
 import { createWant } from "./want.js";
 import { createMourning } from "./mourning.js";
 import { createDivine } from "./divine.js";
+import { createSettlement } from "./settlement.js";
 
 /**
  * @typedef {import("./agent.js").Agent} Agent
@@ -40,6 +41,7 @@ import { createDivine } from "./divine.js";
  * @property {number} weaponisedTick   When someone used it against the subject.
  * @property {string|null} originatorId
  * @property {number} [timesTold]     How many times it has been passed on.
+ * @property {number} [publicTick]    Tick it went public, once it has.
  * @property {number} [mutations]     How many of those tellings warped it.
  */
 
@@ -142,6 +144,7 @@ import { createDivine } from "./divine.js";
  * @property {import("./want.js").Want} want  The keeper's own score: harmony, prosperity, legacy.
  * @property {import("./mourning.js").Mourning} mourning  Funerals still coming, and the memorials of the lost.
  * @property {import("./divine.js").Divine} divine      Apparitions, omens and blessings: how the keeper is felt without speaking.
+ * @property {import("./settlement.js").Settlement} settlement  The camp: stores, buildings, the Hold. Dormant unless the game mode enables it.
  * @property {Moment[]} pending     Emitted moments awaiting a model answer.
  * @property {Moment[]} resolved    Moments that have been answered and applied.
  * @property {number} seq
@@ -241,6 +244,7 @@ export function createWorld(opts = {}) {
     want: createWant(),
     mourning: createMourning(),
     divine: createDivine(),
+    settlement: createSettlement(config),
     pending: [],
     resolved: [],
     seq: 0,
@@ -631,6 +635,7 @@ export function secretClaimFor(secret) {
  */
 export function publishSecret(world, secret) {
   secret.isPublic = true;
+  secret.publicTick = world.clock.tick;
   secret.lastSpreadTick = world.clock.tick;
   for (const agent of world.agents) {
     const holder = secret.holders[agent.id];

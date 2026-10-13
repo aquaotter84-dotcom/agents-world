@@ -619,6 +619,144 @@ export const DEFAULT_CONFIG = {
     alwaysMomentKinds: ["confront", "betray", "confide", "declare", "call_in"]
   },
 
+  settlement: {
+    /**
+     * Phase F: the settlement / base-game layer.
+     *
+     * The engine defaults keep this dormant (`enabled: false`): a pure
+     * simulation world carries the state but never produces, consumes,
+     * storms or collapses, and — critically — draws nothing from the RNG
+     * and adds no intents, so seeded worlds replay exactly as before.
+     * The game mode (the app, and any host that wants the base game)
+     * activates it by passing `{ settlement: { enabled: true } }` to
+     * `createWorld`, or by calling `activateSettlement(world)` on a
+     * world that already exists. Every number for the layer lives in
+     * this one section.
+     */
+    enabled: false,
+
+    /** What a new camp starts with, and where its will starts. */
+    startingFood: 30,
+    startingMaterials: 16,
+    startingHold: 66,
+
+    /** Stores: each living mind eats this much food per world day. */
+    foodPerMindPerDay: 1,
+    /** A day nobody ate costs every mind this much energy. */
+    starveEnergyPerDay: 7,
+
+    /**
+     * The buildings of the camp. `produces` is the store a staffed
+     * building fills; output is crew size times the per-hand rate,
+     * bent by the social factors in the settlement system (an exposed
+     * secret, a mourning crew). Fields are the camp's rough starting
+     * ground; everything else is built on purpose, over time.
+     */
+    buildings: [
+      { kind: "fields",   name: "the Fields",       regionId: "lowlands",   produces: "food",      perHandPerDay: 3.9, maxCrew: 3, cost: 0,  workNeeded: 40, startBuilt: true },
+      { kind: "workshop", name: "the Workshop",     regionId: "market",     produces: "materials", perHandPerDay: 2.6, maxCrew: 3, cost: 6,  workNeeded: 60, startBuilt: false },
+      { kind: "hall",     name: "the Common Hall",  regionId: "lantern",    produces: null,        perHandPerDay: 0,   maxCrew: 2, cost: 10, workNeeded: 70, startBuilt: false, shelter: 16 },
+      { kind: "memorial", name: "the Memorial",     regionId: "crossroads", produces: null,        perHandPerDay: 0,   maxCrew: 3, cost: 8,  workNeeded: 50, startBuilt: false }
+    ],
+
+    /** Camp -> Hamlet -> Town, read off what the camp has actually become. */
+    hamletActiveBuildings: 2,
+    hamletWallLevel: 1,
+    townActiveBuildings: 4,
+    townWallLevel: 2,
+    townPopulation: 10,
+
+    /** The North Wall in the base game: the project's first completion is
+     * level 1, and every re-completion after it is the next level. Work on
+     * each further level goes this much less far per hand, so the wall
+     * stops being a day-one errand and becomes the thing that holds. */
+    wallWorkScale: 0.55,
+    wallLevelWorkGrowth: 0.85,
+
+    /** Storm season, on a forecast clock measured in world days. Strength
+     * is deterministic: base plus a stepped cycle, never an RNG draw. */
+    stormFirstDay: 5,
+    stormIntervalDays: 5,
+    stormBaseStrength: 36,
+    stormStrengthStep: 7,
+    stormStrengthCycle: 22,
+    /** Defence scoring: what the camp answers a storm with. */
+    wallDefensePerLevel: 16,
+    wallDefensePerCondition: 0.28,
+    hallShelter: 16,
+    hallStaffedShelterBonus: 6,
+    settlementLevelDefense: 4,
+    /** At or above this margin the camp simply holds. */
+    stormHeldMargin: 10,
+    /** Condition lost per point of storm strength past the defence, per target. */
+    stormDamagePerShortfall: 0.9,
+    stormWallDamagePerShortfall: 0.7,
+    /** Share of stored food a breached storm spoils. */
+    stormFoodLossShare: 0.25,
+    holdStormHeld: 4,
+    holdStormWeathered: -3,
+    holdStormBreached: -10,
+
+    /** The Hold: the camp's will to stay together, fed daily. */
+    holdFedPerDay: 2.2,
+    holdStarvingPerDay: -10,
+    holdLowFoodPerDay: -3.5,
+    /** Daily Hold movement per point the camp's average mood sits from 50. */
+    holdMoraleFactor: 0.07,
+    holdPerVendettaPerDay: -1.2,
+    holdHallStaffedPerDay: 1,
+    holdMemorialPerDay: 0.6,
+    /** Days at zero Hold (or of outright starvation) before it is over. */
+    collapseGraceDays: 2,
+    starveCollapseDays: 4,
+    /** Population bounds for the base game. */
+    minPopulation: 4,
+    maxPopulation: 14,
+    /** In a fed, holding camp a wanderer may join this often (world days),
+     * and a starving or broken one loses its most adrift unprotected mind. */
+    arrivalIntervalDays: 3,
+    departureHoldBelow: 18,
+
+    /** Social strategy, as numbers: what a mind's state does to the work. */
+    secretExposureFactor: 0.45,
+    secretExposureTicks: 96,
+    mourningWorkFactor: 0.55,
+    mourningProductionFactor: 0.6,
+    memorialBondAffinity: 9,
+    memorialBondTrust: 11,
+    /** Resentment this close to the rivalry line reads as "about to split". */
+    crewFeudWarningMargin: 10,
+
+    /**
+     * Keeper acts for the camp, priced in the same influence blessings
+     * and omens use — that shared purse is the tradeoff. An emergency
+     * answered is a blessing not given.
+     */
+    reliefCost: 10,
+    reliefFood: 14,
+    reliefHold: 3,
+    reliefCooldownTicks: 48,
+    repairCost: 8,
+    repairCondition: 45,
+    repairCooldownTicks: 48,
+    rallyCost: 7,
+    rallyHold: 9,
+    rallyCooldownTicks: 72,
+    /** What each camp act does to the keeper's own meters. */
+    actWant: {
+      relief: { prosperity: 2, harmony: 2 },
+      repair: { prosperity: 3, harmony: 1 },
+      rally: { harmony: 3, legacy: 1 }
+    },
+
+    /** What the ending itself does to the keeper's own meters. */
+    collapseWant: { legacy: 3, harmony: -6 },
+
+    /** Work one build/repair act puts in, before social factors. */
+    buildWorkBase: 10,
+    buildWorkPerFocus: 0.05
+  },
+
   limits: {
     /** World event log length. Roughly two world days of ordinary activity. */
     events: 2000,
