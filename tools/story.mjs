@@ -15,6 +15,13 @@ for (let i = 0; i < 480; i++) {
   step(world);
   for (const m of [...world.pending]) {
     const a = agentById(world, m.agentId);
+    // Not every moment is a choice between options: a cognition plan, a
+    // petition, a whisper and a goal approach are proposals the model writes.
+    // There is nothing to rank, and the engine answers those itself.
+    if (!m.options || !m.options.length) {
+      resolveMoment(world, m.id, {});
+      continue;
+    }
     let best = m.options[0], bestScore = -1;
     for (const o of m.options) {
       const drive = TONE[o.tone] || "focus";
@@ -25,14 +32,40 @@ for (let i = 0; i < 480; i++) {
   }
 }
 
-// Print one full day, in order.
-const dayStart = world.events.filter(e => e.tick <= 480).length;
+/*
+ * Print one full day, in order — as a story rather than as a log.
+ *
+ * A tick of nine minds writes four lines and half of them are the simulation
+ * keeping its own books: opinion deltas between pairs, minds that considered
+ * asking the keeper for something and did not, moments the model never answered
+ * in time. Reading the raw log is how that gets missed — the drama is in there,
+ * spread thin. This prints the beats and counts what it left out; `--all` prints
+ * every line, which is what the record does.
+ *
+ * Marks match the app's own reading of `significance`: `**` a moment (0.85+),
+ * `* ` a beat (0.6+), and nothing for the texture underneath.
+ */
+const showAll = process.argv.includes("--all");
+const BOOKKEEPING_KINDS = new Set(["relationship"]);
+const PLUMBING = [
+  /wanted to petition the keeper, but had nothing in the world to point at/,
+  /started to tell the keeper something and stopped/,
+  /No answer arrived in time; the engine made the call/
+];
+const isBookkeeping = e =>
+  BOOKKEEPING_KINDS.has(e.kind) ||
+  (e.kind === "proposal" && !e.authored) ||
+  PLUMBING.some(rx => rx.test(e.text || ""));
+
 const target = world.events.filter(e => e.tick > 430 && e.tick <= 478).slice().reverse();
 console.log(`=== Day ${world.clock.day - 1} ===`);
+let hidden = 0;
 for (const e of target) {
+  if (!showAll && isBookkeeping(e)) { hidden += 1; continue; }
   const who = e.agentId ? agentById(world, e.agentId) : null;
-  const tag = e.significance >= 0.55 ? "**" : e.significance >= 0.3 ? "* " : "  ";
+  const tag = e.significance >= 0.85 ? "**" : e.significance >= 0.6 ? "* " : "  ";
   console.log(`${tag}[${e.kind}] ${e.text}`);
 }
+if (hidden) console.log(`\n(${hidden} quieter lines not shown — the day's full record is \`--all\`)`);
 console.log("\n=== Chronicle ===");
 world.chronicle.slice(-3).forEach(c => console.log(`Day ${c.day}: ${c.summary}\n`));

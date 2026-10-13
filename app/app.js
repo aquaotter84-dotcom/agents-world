@@ -46,6 +46,11 @@ import { portraitSvg } from "./portrait.js";
 import { award, summarize, normalizeKeeper, emptyKeeper, RANKS } from "./keeper.js";
 import { cleanReply, stripScaffolding } from "./reply-sanitize.js";
 import { PROVIDERS, providerById, providerCallOf, normalizeSettings, hostOf } from "./providers.js";
+import {
+  isBookkeeping, beatTier, BEAT_FLOOR,
+  worldPulse, paceFor, directorNote, storylineBoard, foldAmbient, todaySoFar, replayFrames
+} from "./director.js";
+import { arm as armSound, isSoundOn, setSoundOn, sting } from "./sound.js";
 import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing, mourningMarks, divineMarks } from "./board.js";
 import { digestMark, awayDigest, digestLine } from "./digest.js";
 
@@ -96,8 +101,12 @@ let world = null;
 let settings = normalizeSettings({});
 let chats = {};
 let chatRoles = {};
+/** Conversations a model has written again, by event id. Never part of the world. */
+let retold = {};
 let ui = { selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
 let lastSeenAt = Date.now();
+/** The tick the world had reached the last time it was saved, for the replay. */
+let lastSeenTick = null;
 let keeper = emptyKeeper();
 /** The last "while you were away" digest, kept until the keeper has read it. */
 let lastDigest = null;
@@ -145,6 +154,12 @@ async function pollServiceOnce() {
   const wasLost = serviceLost;
   serviceLost = false;
   if (next.clock.tick === world.clock.tick) return true;
+  const sameWorld = next.seed === world.seed;
+  // The world moved between two polls. That is the same absence as coming back
+  // to an app that was closed, so it gets the same treatment: the ticks play
+  // back, and only then does the screen settle into live. A film already playing
+  // is not cut off here — maybeReplayMissed decides whether this one is bigger.
+  const missedFrom = lastSeenTick;
   if (wasLost) {
     // The service was down and is back: whatever happened to the world while
     // it was away is an absence like any other.
@@ -157,11 +172,15 @@ async function pollServiceOnce() {
     }
     save();
     renderAll();
+    if (sameWorld) maybeReplayMissed(missedFrom);
+    else stopReplay();
     return true;
   }
   world = next;
   save();
   renderAll();
+  if (sameWorld) maybeReplayMissed(missedFrom);
+  else stopReplay();
   return true;
 }
 
@@ -190,6 +209,9 @@ async function checkServiceNow() {
     return;
   }
   const previouslySeen = digestMark(world);
+  // Is this the world the keeper was watching, or a different one? A keeper who
+  // points the app at another host has missed nothing there.
+  const sameWorld = world.seed === next.seed;
   world = next;
   serviceMode = true;
   serviceLost = false;
@@ -197,8 +219,12 @@ async function checkServiceNow() {
   const digest = awayDigest(previouslySeen, world, { hours: Math.round((Date.now() - lastSeenAt) / 3.6e5) / 10, because: "service" });
   if (!digest.empty && digest.ticks > 0) lastDigest = digest;
   if (servicePollTimer == null) startServicePolling();
+  // Where the keeper last stood, before this adoption moves the mark.
+  const missedFrom = lastSeenTick;
   save();
   renderAll();
+  if (sameWorld) maybeReplayMissed(missedFrom);
+  else stopReplay();
   loadAdmin();
   if (status) {
     status.textContent = "Found it. Day " + world.clock.day + ", tick " + world.clock.tick +
@@ -208,17 +234,32 @@ async function checkServiceNow() {
 }
 
 function save() {
+  // The world has now been seen up to here: this is the mark every replay is
+  // measured from, so it is kept in step with what is written down.
+  lastSeenTick = world.clock.tick;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       world: serializeWorld(world),
-      settings, chats, chatRoles, ui, keeper, lastSeenAt: Date.now(), digest: lastDigest
+      settings, chats, chatRoles, retold, ui, keeper, lastSeenAt: Date.now(), digest: lastDigest,
+      // Where the world had got to the last time anybody looked. The replay is
+      // measured from here, so a keeper coming back to a world that ran on gets
+      // to see the ticks they missed rather than being told about them.
+      lastSeenTick: world.clock.tick
     }));
   } catch (e) { /* storage full/blocked */ }
 }
 function freshWorld(seed) {
   return createWorld({ seed: seed ?? (1 + Math.floor(Math.random() * 1e9)) });
 }
+/**
+ * Read the save. The returned `seen` is where the keeper last stood *as it was
+ * written down* — captured before anything in here saves, because a brand-new
+ * world is saved at tick 0 on the way out of this function and that must not
+ * look like an absence the keeper missed.
+ * @returns {{ fresh: boolean, seen: number|null }}
+ */
 function load() {
+  const seenBefore = lastSeenTick;
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw) {
@@ -228,11 +269,13 @@ function load() {
       settings = normalizeSettings(settings);
       chats = s.chats || {};
       chatRoles = s.chatRoles || {};
+      retold = s.retold && typeof s.retold === "object" ? s.retold : {};
       ui = Object.assign(ui, s.ui);
       keeper = normalizeKeeper(s.keeper);
       lastSeenAt = s.lastSeenAt || Date.now();
       lastDigest = s.digest || null;
-      return { fresh: false };
+      lastSeenTick = Number.isFinite(s.lastSeenTick) ? s.lastSeenTick : null;
+      return { fresh: false, seen: lastSeenTick };
     }
     // Migrate Jeremy's live v1 world — never start him over.
     const oldRaw = localStorage.getItem(OLD_KEY);
@@ -250,14 +293,14 @@ function load() {
         }
         lastSeenAt = Date.now();
         save();
-        return { fresh: true };
+        return { fresh: true, seen: seenBefore };
       }
     }
   } catch (e) { /* corrupt: fall through to fresh */ }
   world = freshWorld();
   lastSeenAt = Date.now();
   save();
-  return { fresh: true };
+  return { fresh: true, seen: seenBefore };
 }
 
 /* ---------- tiny DOM helpers ---------- */
@@ -450,6 +493,12 @@ async function tick(manual) {
     if (manual) toast("The world is running in the background, on its own clock.");
     return;
   }
+  // A replay is a deliberate look back; a live tick underneath it would move the
+  // world out from under the film.
+  if (replay) {
+    if (manual) toast("Catching you up first — tap the card to skip to live.");
+    return;
+  }
   if (ticking) return;
   ticking = true;
   try {
@@ -474,6 +523,9 @@ async function tick(manual) {
   } finally {
     ticking = false;
   }
+  // The conversations this tick are the ones worth rewriting, and the ones a
+  // viewer is about to read. One call at most, and only if the keeper asked.
+  void retellNewestScene();
 }
 
 async function resolveMomentWithModel(moment, manual) {
@@ -533,10 +585,12 @@ async function mindReplies(a, history, roleId) {
   return clean;
 }
 
-function armTick() {
+/** @param {number} [secs] the pace to arm at — the director's, or the keeper's */
+function armTick(secs) {
   if (tickTimer) clearInterval(tickTimer);
-  const secs = Math.max(15, parseInt(settings.tickSeconds, 10) || 45);
-  tickTimer = setInterval(() => { tick(false); }, secs * 1000);
+  const rate = Math.max(15, secs || parseInt(settings.tickSeconds, 10) || 45);
+  armedSecs = rate;
+  tickTimer = setInterval(() => { tick(false); }, rate * 1000);
 }
 
 /* ---------- rendering ---------- */
@@ -555,6 +609,32 @@ const KIND_TONE = {
   want: "ember",
   gossip: "mist", contact: "mist"
 };
+/* ---------- watching ----------
+ *
+ * Which lines are events and which are the simulation keeping its books, and how
+ * much room each has earned, live in `./director.js` — this file renders what
+ * that decides. The World screen is the one place that has to be worth watching,
+ * so it shows what a person would call an event and counts what it left out;
+ * nothing is deleted, and the Record's Feed is still every line.
+ */
+const BEAT_HOLD_MS = 9000;
+/** In watch mode a beat is worth holding longer: there is nowhere else to look. */
+const BEAT_HOLD_WATCH_MS = 16000;
+/** Rows the World screen's feed will show before it stops. */
+const FEED_ROWS = 6;
+/** Ticks the timeline strip covers: one world day, the unit the world thinks in. */
+const TIMELINE_TICKS = 48;
+/** How much of the log the feed reads to fill those rows (before folding). */
+const FEED_SCAN = 40;
+/** The shortest absence worth replaying: below this, live is the same thing. */
+const REPLAY_MIN_TICKS = 6;
+/** Ticks one replay frame covers per second of real time. */
+const REPLAY_FRAME_MS = 1400;
+/** Most frames a replay will play before it settles into live. */
+const REPLAY_MAX_FRAMES = 24;
+/** Rows the feed holds while a replay plays: the story so far, not one tick. */
+const REPLAY_FEED_ROWS = 8;
+
 /* Stamp events "Day 3 · dusk" from the engine's own clock math. */
 function eventStamp(e) {
   try {
@@ -579,15 +659,32 @@ function credit(kind, key) {
   if (award(keeper, kind, key)) save();
 }
 
-function sceneHtml(scene) {
+/**
+ * The lines of a conversation, as they are shown.
+ *
+ * The engine writes every scene from templates, and measured over ten days the
+ * whole world speaks in about 462 distinct sentences — which is the ceiling a
+ * long watch runs into. So when a keeper has a key and has left it on, a model
+ * retells the notable conversations in the two minds' own voices. The engine's
+ * lines are never replaced: they stay in the world, which is the record, and the
+ * retelling is drawn over them and marked as what it is.
+ * @param {any} e the event
+ */
+function sceneHtml(e) {
+  const scene = e && e.scene;
   if (!scene || !scene.length) return "";
-  return '<div class="scene">' + scene.map(line => {
+  const retold = retoldFor(e.id);
+  const lines = retold ? retold.lines : scene;
+  const body = lines.map(line => {
     const sp = agentById(world, line.speakerId);
     const who = sp ? sp.name : "?";
     const color = sp ? sp.color : "#9a9aa8";
     return '<div class="sline"><span class="swho" style="color:' + esc(color) + '">' + esc(who) +
       '</span> ' + esc(line.text) + "</div>";
-  }).join("") + "</div>";
+  }).join("");
+  if (!retold) return '<div class="scene">' + body + "</div>";
+  return '<div class="scene retold">' + body +
+    '<div class="retold-tag">✦ retold by ' + esc(retold.model || "a model") + "</div></div>";
 }
 function eventCard(e) {
   if (e.scene && e.scene.length) credit("scene", e.id);
@@ -597,12 +694,14 @@ function eventCard(e) {
   const color = a ? a.color : "#9a9aa8";
   const name = a ? agentName(a) : "World";
   const tone = KIND_TONE[e.kind] || "";
+  const tier = beatTier(e);
   const div = document.createElement("div");
-  div.className = "card event" + (tone ? " tone-" + tone : "");
+  div.className = "card event" + (tone ? " tone-" + tone : "") + " tier-" + tier;
   div.innerHTML =
     '<div class="eicon' + (a ? " tappable" : "") + '" style="color:' + esc(color) + '">' + (a ? portraitHtml(a) : esc(icon)) + "</div>" +
-    '<div><div class="etext">' + esc(e.text) + "</div>" + sceneHtml(e.scene) +
-    '<div class="emeta"><span class="ewho">' + esc(name) + "</span> · " + esc(eventStamp(e)) + "</div></div>";
+    '<div><div class="etext">' + esc(e.text) + "</div>" + sceneHtml(e) +
+    '<div class="emeta">' + (tier === "moment" ? '<span class="beat-tag">a moment</span> ' : "") +
+    '<span class="ewho">' + esc(name) + "</span> · " + esc(eventStamp(e)) + "</div></div>";
   if (a) {
     const open = () => openSheet(a.id);
     div.querySelector(".eicon").addEventListener("click", open);
@@ -693,12 +792,633 @@ function renderProject() {
     '<div class="project-milestones">' + milestoneHtml + "</div>" +
     '<div class="project-builders">' + (completed ? "Raised by " : "At work: ") + builderText + "</div>";
 }
+/**
+ * One row of the feed for a run of ambient lines — somebody crossing a region,
+ * somebody watching the world go by. About half of everything the world logs is
+ * this, and it is a map rather than a story: folded into a single row with the
+ * faces on it, six rows of feed hold six pieces of news instead of six walks.
+ * @param {any[]} events
+ */
+function ambientRow(events) {
+  const div = document.createElement("div");
+  div.className = "card event ambient";
+  const faces = [];
+  const seen = new Set();
+  for (const e of events) {
+    if (!e.agentId || seen.has(e.agentId)) continue;
+    seen.add(e.agentId);
+    const a = agentById(world, e.agentId);
+    if (a) faces.push('<span style="color:' + esc(a.color) + '" class="ambient-face" title="' + esc(agentName(a)) + '">' + portraitHtml(a) + "</span>");
+    if (faces.length >= 4) break;
+  }
+  const lines = events.slice(0, 3).map(e => {
+    const a = e.agentId ? agentById(world, e.agentId) : null;
+    return '<div class="ambient-line"><b style="color:' + esc(a ? a.color : "#9a9aa8") + '">' +
+      esc(a ? a.name : "World") + "</b> " + esc(brief(e.text, a ? a.name : "")) + "</div>";
+  }).join("");
+  const rest = events.length - Math.min(3, events.length);
+  div.innerHTML =
+    '<div class="ambient-faces">' + faces.join("") + "</div>" +
+    '<div class="ambient-body">' + lines +
+    (rest > 0 ? '<div class="ambient-line more">and ' + rest + " more like it</div>" : "") + "</div>";
+  return div;
+}
+
+/** An engine line without the name we are about to draw next to it. */
+function brief(text, name) {
+  let s = String(text || "").replace(/\s+/g, " ").trim();
+  if (name && s.startsWith(name + " ")) s = s.slice(name.length + 1);
+  return s.length > 90 ? s.slice(0, 87).trimEnd() + "…" : s;
+}
+
+/**
+ * The World screen's feed: the last few things a person would call events, with
+ * the bookkeeping counted rather than printed and the ambient run folded into
+ * one row. The count is real — it is the number of bookkeeping lines the world
+ * wrote since the oldest line shown, so it can never claim more quiet than
+ * actually happened.
+ */
 function renderFeed() {
+  // During a replay the feed is the film: it accumulates the ticks the keeper
+  // missed, and a live re-render (a poll, a tick) must not wipe the story
+  // halfway through it. When the film ends, renderAll draws the live feed again.
+  if (replay) return;
   const feed = $("activity-feed");
   feed.innerHTML = "";
-  world.events.slice(0, 6).forEach(e => feed.appendChild(eventCard(e)));
   if (!world.events.length) {
     feed.innerHTML = '<p class="note" style="text-align:center">The world is quiet. Give it a tick.</p>';
+    return;
+  }
+  const candidates = [];
+  let legacy = false;
+  for (const e of world.events) {
+    if (isBookkeeping(e)) { legacy = true; continue; }
+    if (candidates.length >= FEED_SCAN) break;
+    candidates.push(e);
+  }
+  if (!candidates.length) {
+    // A tick of nothing but bookkeeping is still a tick: say so plainly rather
+    // than showing an empty screen.
+    feed.innerHTML = '<p class="note" style="text-align:center">Nothing worth telling happened. ' +
+      "The world is getting on with itself.</p>";
+    return;
+  }
+  const rows = foldAmbient(candidates).slice(0, FEED_ROWS);
+  for (const row of rows) {
+    if (row.kind === "ambient") feed.appendChild(ambientRow(row.events));
+    else feed.appendChild(eventCard(row.event));
+  }
+  // How much quieter the world was than this reads, since the oldest line here.
+  const lastRow = rows[rows.length - 1];
+  const oldest = lastRow.kind === "ambient" ? lastRow.events[lastRow.events.length - 1] : lastRow.event;
+  const quiet = world.events.filter(e => e.tick >= oldest.tick && isBookkeeping(e)).length;
+  if (!quiet && !legacy) return;
+  const p = document.createElement("p");
+  p.className = "feed-quiet";
+  p.textContent = quiet
+    ? quiet + " quieter change" + (quiet === 1 ? "" : "s") + " since then — the record has every line."
+    : "The record has every line, including the ones nobody would say out loud.";
+  feed.appendChild(p);
+}
+
+/**
+ * One tick of the timeline: the best thing it had in it, or nothing.
+ * @param {number} long how many ticks the strip covers
+ */
+function timelineBuckets(long) {
+  const now = world.clock.tick;
+  const from = Math.max(0, now - long + 1);
+  /** @type {Map<number, any>} */
+  const byTick = new Map();
+  for (const e of world.events) {
+    if (e.tick < from) break; // newest first
+    if (isBookkeeping(e)) continue;
+    const prev = byTick.get(e.tick);
+    if (!prev || (e.significance || 0) > (prev.significance || 0)) byTick.set(e.tick, e);
+  }
+  const out = [];
+  for (let t = from; t <= now; t++) out.push({ tick: t, best: byTick.get(t) || null });
+  return out;
+}
+
+/**
+ * The last world day, one tick at a time. A band of gold and blood is a busy
+ * stretch of world; long flat runs are the quiet parts. Tapping a tick plays
+ * forward from there, which is the same machinery as the arrival replay.
+ */
+function renderTimeline() {
+  const el = $("timeline");
+  if (!el) return;
+  const buckets = timelineBuckets(TIMELINE_TICKS);
+  const playingFrom = replay ? replay.from : null;
+  // A film can start before the window this strip covers — an absence is often
+  // longer than a day. Then the leftmost tick is where it starts, for the strip's
+  // purposes: everything the keeper can see on it is part of the replay.
+  const earliest = buckets.length ? buckets[0].tick : null;
+  const playingMark = playingFrom === null ? null
+    : (playingFrom < /** @type {number} */ (earliest) ? earliest : playingFrom);
+  el.innerHTML = buckets.map(b => {
+    const tier = b.best ? beatTier(b.best) : "quiet";
+    const label = b.best
+      ? "Day " + dayOfTick(b.tick) + ": " + brief(b.best.text, "")
+      : "Day " + dayOfTick(b.tick) + ": nothing worth telling";
+    return '<span class="tl-seg ' + (tier === "texture" ? "quiet" : tier) +
+      (b.tick === world.clock.tick ? " now" : "") +
+      (playingMark !== null && b.tick === playingMark ? " playing" : "") +
+      '" data-tick="' + b.tick + '" title="' + esc(label) + '"></span>';
+  }).join("");
+}
+
+/** Watch the world from a tick on the timeline. */
+function replayFromTick(tick) {
+  const from = Number(tick);
+  if (!Number.isFinite(from) || from >= world.clock.tick) { toast("That is where the world is now — nothing to catch up on."); return; }
+  const film = replayFrames(world, { fromTick: from, ticks: world.clock.tick - from, maxFrames: REPLAY_MAX_FRAMES });
+  if (!film.frames.length) { toast("Nothing worth watching happened between then and now."); return; }
+  startReplay(film);
+}
+
+/** What the world has done since dawn, in one sentence, for a keeper in a hurry. */
+function renderToday() {
+  const el = $("today-line");
+  if (!el) return;
+  const today = todaySoFar(world);
+  el.textContent = today.line;
+  el.className = today.total ? "today-line" : "today-line quiet";
+}
+
+/**
+ * The arrival: one line taking over the top of the World screen when something
+ * actually happened.
+ *
+ * A tick lands every 45 seconds and mostly changes numbers nobody can see. When
+ * one of them is a real beat — a wall standing, a betrayal, a death, a law
+ * written, the keeper's own hand — the screen should say so before the viewer
+ * has to go looking for it. This is the whole difference between a log and a
+ * broadcast, and it costs one card.
+ */
+let presentedSeq = 0;
+let beatHeldUntil = 0;
+let beatHeldSig = 0;
+let beatTimer = 0;
+
+function hideBeat() {
+  const el = $("beat-banner");
+  if (!el) return;
+  el.classList.add("hidden");
+  el.classList.remove("beat-in");
+  beatHeldUntil = 0;
+  beatHeldSig = 0;
+}
+
+/**
+ * Was the last thing shown better than this? Then do not interrupt it — unless
+ * this is a replay frame, which is a deliberate step through what happened and
+ * must be allowed to go backwards.
+ * @param {any} e
+ * @param {{hold?: number, replay?: boolean, progress?: string}} [opts]
+ */
+function showBeat(e, opts = {}) {
+  const el = $("beat-banner");
+  if (!el) return;
+  const sig = e.significance || 0;
+  if (!opts.replay && Date.now() < beatHeldUntil && sig < beatHeldSig) return;
+  const a = e.agentId ? agentById(world, e.agentId) : null;
+  const tone = KIND_TONE[e.kind] || "";
+  const fresh = !opts.replay && e.tick >= world.clock.tick - 1;
+  // A beat is worth holding longer when there is nowhere else to look.
+  const hold = opts.hold ?? (settings.watching ? BEAT_HOLD_WATCH_MS : BEAT_HOLD_MS);
+  el.className = "card beat tier-" + beatTier(e) + (tone ? " tone-" + tone : "") + (opts.replay ? " replaying" : "");
+  el.innerHTML =
+    '<p class="eyebrow">' + esc(fresh ? "Just now" : eventStamp(e)) + "</p>" +
+    '<p class="beat-text">' + esc(e.text) + "</p>" +
+    sceneHtml(e) +
+    (a ? '<p class="beat-who">' + esc(agentName(a)) + "</p>" : "") +
+    (opts.progress ? '<p class="beat-progress">▶ replaying · ' + esc(opts.progress) + " · tap to catch up</p>" : "");
+  // Restart the entrance animation even when the card was already up.
+  el.classList.remove("beat-in");
+  void el.offsetWidth;
+  el.classList.add("beat-in");
+  beatHeldUntil = Date.now() + hold;
+  beatHeldSig = sig;
+  if (beatTimer) clearTimeout(beatTimer);
+  beatTimer = setTimeout(hideBeat, hold);
+}
+
+/**
+ * Look for anything worth interrupting for since the last render and announce
+ * the best of it.
+ *
+ * The watermark is a sequence number, not the world object, because a world
+ * that is kept elsewhere comes back off the wire as a new object on every poll
+ * and would look like a different world every ten seconds. The sequence counter
+ * travels inside the save, so it survives that. Nothing is announced for the
+ * first look at a world, or for a world that is younger than the one already on
+ * screen (a reset, a restore, a fresh local world) — those arrive with their own
+ * explanations, and the record has the rest.
+ */
+function presentBeats() {
+  if (!world) return;
+  if (replay) {
+    // A film is playing: the live world can wait. Nothing interrupts a replay,
+    // and beats that land while it runs are not queued up to ambush the keeper
+    // when it ends either — the watermark moves past them.
+    presentedSeq = world.seq;
+    return;
+  }
+  if (!presentedSeq || world.seq <= presentedSeq) {
+    presentedSeq = world.seq;
+    return;
+  }
+  if (!world.events.length) return;
+  const fresh = [];
+  for (const e of world.events) {
+    if (e.seq <= presentedSeq) break;
+    fresh.push(e);
+  }
+  if (!fresh.length) return;
+  presentedSeq = world.seq;
+  const best = fresh
+    .filter(e => !isBookkeeping(e))
+    .sort((a, b) => (b.significance || 0) - (a.significance || 0))[0];
+  if (!best || (best.significance || 0) < BEAT_FLOOR) return;
+  showBeat(best);
+  // A phone in a pocket cannot see the card. Only a real moment makes a sound
+  // when the keeper has asked for sound; a beat is a vibration, not a chime.
+  sting(beatTier(best) === "moment" ? "moment" : "beat", { settings });
+}
+
+/* ---------- the director ----------
+ *
+ * The world runs at one tempo, and the interesting parts do not arrive evenly:
+ * measured over ten world days, 39.5% of ticks produce something worth
+ * announcing, and those ticks cluster. So the app runs the clock to match — fast
+ * while a feud is live, slow once it settles — and says in the header which of
+ * those it thinks it is looking at. `./director.js` decides; this section
+ * executes the decision and draws the board.
+ */
+let director = { level: "quiet", pace: paceFor("quiet"), because: "", reasons: [], cards: [] };
+/** The interval the tick timer is currently armed at, so a no-op render never re-arms it. */
+let armedSecs = 0;
+
+const PULSE_RANK = { quiet: 0, settling: 1, live: 2, hot: 3 };
+
+/** The pace the clock should run at right now, director or keeper, whichever has it. */
+function currentTickSeconds() {
+  if (settings.director && !serviceMode) return director.pace.secs;
+  return Math.max(15, parseInt(settings.tickSeconds, 10) || 45);
+}
+/** Re-arm the tick timer only when the pace actually changed. */
+function syncTickPace() {
+  const secs = currentTickSeconds();
+  if (tickTimer && armedSecs === secs) return;
+  armedSecs = secs;
+  armTick(secs);
+}
+
+/**
+ * Read the world, set the pace, write the header line and draw the board.
+ * Called from `renderAll`, so it costs one pass over the event log per render.
+ */
+function renderDirector() {
+  const pulse = worldPulse(world);
+  const directed = !!settings.director && !serviceMode;
+  const secs = directed ? paceFor(pulse.level).secs : Math.max(15, parseInt(settings.tickSeconds, 10) || 45);
+  const pace = directed ? paceFor(pulse.level) : { secs, label: "", note: "" };
+  const wasLevel = director.level;
+  director = { ...director, ...pulse, level: pulse.level, pace, because: pulse.because };
+
+  const note = $("director-note");
+  if (note) {
+    note.textContent = directorNote(pulse, pace, { directed });
+    note.className = "director-note lvl-" + pulse.level;
+  }
+  renderStorylines(pulse);
+  syncTickPace();
+  // The world going quiet is worth hearing once — the same way a chime for a
+  // moment is — but only when the keeper has asked to hear the world at all, and
+  // never on top of a replay.
+  if (!replay && PULSE_RANK[wasLevel] >= PULSE_RANK.live && PULSE_RANK[pulse.level] <= PULSE_RANK.settling) {
+    sting("settle", { settings });
+  }
+  return pulse;
+}
+
+/* ---------- storylines ----------
+ * Three cards answering the question the World screen never did: what story is
+ * running, and who should I be watching? Every card is a reading of state the
+ * engine already keeps, with a way to follow the thread it points at.
+ */
+function renderStorylines(pulse) {
+  const el = $("storylines");
+  if (!el) return;
+  const cards = storylineBoard(world, { pulse, limit: 3 });
+  director.cards = cards;
+  if (!cards.length) { el.innerHTML = ""; return; }
+  el.innerHTML = cards.map(card =>
+    '<div class="card storyline tone-' + esc(card.tone) + '" data-story="' + esc(card.id) + '">' +
+      '<p class="eyebrow">' + esc(card.eyebrow) + "</p>" +
+      '<p class="story-title">' + esc(card.title) + "</p>" +
+      '<p class="story-line">' + esc(card.line) + "</p>" +
+      '<p class="story-meta">' + esc(card.meta) + "</p>" +
+      (card.action ? '<button class="story-act" data-story-act="' + esc(card.id) + '">' + esc(card.action.label) + "</button>" : "") +
+    "</div>").join("");
+}
+
+/** Follow a storyline: the thread it points at, or the screen that answers it. */
+function openStoryline(id) {
+  const card = (director.cards || []).find(c => c.id === id);
+  if (!card || !card.action) return;
+  if (card.action.thread) followThread(card.action.thread.kind, card.action.thread.id);
+  else if (card.action.view) { ui.record = card.action.view; save(); switchTab("record"); }
+}
+
+/* ---------- watch mode ----------
+ * Everything on the World screen is a control sized for thumbs. Watch mode is
+ * the other thing this app can be: the map, the beats, and nothing to press —
+ * what you would cast to a screen or leave on a desk. It changes nothing about
+ * the world; it changes how much of the screen the world gets.
+ */
+function setWatching(on, { quiet = false } = {}) {
+  settings.watching = !!on;
+  document.body.classList.toggle("watching", !!on);
+  const btn = $("btn-watch");
+  if (btn) {
+    btn.classList.toggle("on", !!on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.textContent = on ? "▣ Watching" : "▣ Watch";
+  }
+  if (on && !$("screen-world").classList.contains("active")) switchTab("world");
+  save();
+  if (!quiet) toast(on ? "Watch mode — the map, the beats, and nothing to press." : "Back to the controls.");
+}
+
+/* ---------- the replay ----------
+ * The world does not stop when nobody is looking, and coming back to it should
+ * pay the viewer for the wait. A replay is not a re-enactment: the world is
+ * deterministic, so the last stretch of real ticks is read back in order, beats
+ * kept and walking dropped, one frame at a time.
+ */
+let replay = null;
+
+/**
+ * @param {{frames: any[], from: number, to: number, quiet: number}} film
+ */
+function startReplay(film) {
+  if (!film || !film.frames || !film.frames.length) return false;
+  stopReplay();
+  stopTicks();
+  // The seed rides along so a film can tell whether it is about the world on
+  // screen: restoring a backup or pointing the app at another host is not a
+  // reason to keep playing the old world's story.
+  replay = { ...film, seed: world.seed, i: 0, timer: 0 };
+  replayFrame();
+  // The timeline says where a film starts as well as where the world is, so it
+  // is redrawn the moment one does.
+  renderTimeline();
+  return true;
+}
+
+function stopTicks() {
+  if (tickTimer) clearInterval(tickTimer);
+  tickTimer = null;
+  armedSecs = 0;
+}
+
+function replayFrame() {
+  if (!replay) return;
+  const frame = replay.frames[replay.i];
+  if (!frame) { finishReplay(); return; }
+  const best = frame.events[0];
+  if (best) showBeat(best, {
+    hold: REPLAY_FRAME_MS + 500,
+    replay: true,
+    progress: (replay.i + 1) + "/" + replay.frames.length
+  });
+  for (const e of frame.events) rippleForEvent(e);
+  // The film accumulates rather than replacing: by the end the feed reads as the
+  // story of the absence, which is the whole reason for playing it.
+  replay.shown = [...frame.events, ...(replay.shown || [])].slice(0, REPLAY_FEED_ROWS);
+  renderReplayFeed(frame);
+  replay.i += 1;
+  replay.timer = setTimeout(replayFrame, REPLAY_FRAME_MS);
+}
+
+/** The feed during a replay: everything shown so far, and how far through it is. */
+function renderReplayFeed(frame) {
+  const feed = $("activity-feed");
+  if (!feed || !frame) return;
+  feed.innerHTML = "";
+  const rows = (replay && replay.shown ? replay.shown : frame.events).slice(0, REPLAY_FEED_ROWS);
+  rows.forEach(e => feed.appendChild(eventCard(e)));
+  const p = document.createElement("p");
+  p.className = "feed-quiet replay";
+  p.textContent = "▶ replaying " + (replay.i + 1) + " of " + replay.frames.length +
+    " · day " + frame.day + " · tap the card to catch up";
+  feed.appendChild(p);
+}
+
+function finishReplay() {
+  const film = replay;
+  replay = null;
+  hideBeat();
+  syncTickPace();
+  renderAll();
+  if (film) toast("That was " + film.frames.length + " tick" + (film.frames.length === 1 ? "" : "s") +
+    " of it. The world is live again.");
+}
+
+/** The keeper tapped through the film: back to now, with the world where it was. */
+function skipReplay() {
+  if (!replay) return;
+  stopReplay();
+  renderAll();
+  toast("Live — the world is where it left off.");
+}
+
+/** Cut a replay short — a tap, or the world moving underneath it. */
+function stopReplay() {
+  if (!replay) return;
+  if (replay.timer) clearTimeout(replay.timer);
+  // The film may own the feed while it is playing; when it is cut short, the
+  // feed goes back to being the live world.
+  const ownedFeed = !!$("activity-feed")?.querySelector(".feed-quiet.replay");
+  replay = null;
+  hideBeat();
+  syncTickPace();
+  renderTimeline();
+  if (ownedFeed) renderFeed();
+}
+
+/**
+ * If the world ran on without this app — a keeper reopening it the next day, or a
+ * hosted world that ticked a hundred times between two polls — show it rather
+ * than describe it. Only for a real absence: a keeper reopening the app a tick
+ * later is already looking at it.
+ * @param {number|null} lastSeenTick
+ */
+function maybeReplayMissed(lastSeenTick) {
+  // A film of a world that is no longer on screen is over, whatever the gap says.
+  if (replay && replay.seed !== world.seed) stopReplay();
+  if (!Number.isFinite(/** @type {number} */ (lastSeenTick))) return false;
+  const from = /** @type {number} */ (lastSeenTick);
+  const gap = world.clock.tick - from;
+  if (gap < REPLAY_MIN_TICKS) return false;
+  // A world that ticks faster than this app polls would otherwise restart its own
+  // film on every poll and never reach the end of one. A film already playing
+  // stands until something bigger than it has been missed.
+  if (replay && gap <= replay.to - replay.from) return false;
+  return startReplay(replayFrames(world, { fromTick: from, ticks: gap, maxFrames: REPLAY_MAX_FRAMES }));
+}
+
+/* ---------- model-written scenes ----------
+ *
+ * The engine writes every conversation from templates — and does it well, for
+ * what it is. But measured over ten world days the whole world speaks in about
+ * 462 distinct sentences, and a keeper watching for a week will have read most
+ * of them several times. That repetition, not the beats, is what a long watch
+ * grinds against.
+ *
+ * So: when a key is attached and this is left on, the notable conversations are
+ * offered to the model, which writes the lines again in the two minds' voices.
+ * The engine's lines stay in the world untouched — the world is the record, and
+ * the record is what the simulation did. What the screen shows is the retelling,
+ * marked as a retelling, stored beside the world rather than in it.
+ */
+/** The shortest line a conversation is worth spending a call on. */
+const RETELL_FLOOR = 0.4;
+/** How many retellings are kept on the device. */
+const RETELL_CAP = 60;
+/** More than this and the reply is not a scene, it is an essay. */
+const RETELL_MAX_LINES = 5;
+
+let sceneRetelling = false;
+
+/** @param {string} eventId */
+function retoldFor(eventId) {
+  return (eventId && retold[eventId]) || null;
+}
+
+/** What the world knows about a speaker, for the model to write them with. */
+function speakerBrief(a) {
+  if (!a) return "someone";
+  return [
+    a.name + (a.epithet ? " " + a.epithet : ""),
+    a.class || "",
+    a.personality || "",
+    "currently " + moodWord(a, tickNow()),
+    a.goal && a.goal.text ? "working toward " + a.goal.text : ""
+  ].filter(Boolean).join("; ");
+}
+
+/**
+ * Ask the model to write a conversation the engine has already had.
+ *
+ * The engine's version is given as the skeleton — what was said, in what order,
+ * and what the world recorded — so the retelling cannot invent a different
+ * event; it can only say it in their voices. Anything that does not come back as
+ * lines attributed to the two speakers is thrown away, and a failed call is
+ * silence, not an error: the world already has the scene.
+ * @param {any} e
+ * @returns {Promise<boolean>} whether anything was kept
+ */
+async function retellScene(e) {
+  const call = activeCall();
+  if (!call) return false;
+  const speakers = [];
+  for (const line of e.scene) {
+    const a = agentById(world, line.speakerId);
+    if (a && !speakers.some(s => s.id === a.id)) speakers.push(a);
+  }
+  if (speakers.length < 2) return false;
+  const names = speakers.map(a => a.name).join(" and ");
+  const system =
+    "You write dialogue for two people in a small living world. You are given what happened " +
+    "between them and the lines already written; write it again in their voices, better.\n" +
+    speakers.map(a => speakerBrief(a)).join("\n") +
+    "\n\nRules: reply with ONLY lines, one per line, each starting with the speaker's first name, " +
+    "a colon, and then what they say. Same number of lines as given, no more than " + RETELL_MAX_LINES +
+    ". No stage directions, no narration, no quotes, no preamble. Each line under 20 words, in the " +
+    "voice of the person saying it, and do not invent anything that did not happen between them.";
+  const user =
+    "What happened: " + e.text + "\n" +
+    "The lines already written:\n" +
+    e.scene.map(line => (agentById(world, line.speakerId) || { name: "?" }).name + ": " + line.text).join("\n") +
+    "\n\nWrite " + names + " again.";
+  let raw = "";
+  try {
+    raw = await modelChat([
+      { role: "system", content: system },
+      { role: "user", content: user }
+    ], 220);
+  } catch (err) {
+    return false; // no key, no answer, rate-limited: the engine's lines stand
+  }
+  const lines = parseSceneLines(raw, speakers);
+  if (lines.length < 2) return false;
+  retold[e.id] = {
+    lines,
+    model: call.model || call.provider.label,
+    tick: world.clock.tick,
+    at: Date.now()
+  };
+  // Keep the save small: the oldest retellings fall off, and the engine's lines
+  // are always still there underneath.
+  const ids = Object.keys(retold);
+  if (ids.length > RETELL_CAP) {
+    for (const id of ids.slice(0, ids.length - RETELL_CAP)) delete retold[id];
+  }
+  save();
+  renderAll();
+  return true;
+}
+
+/**
+ * Read lines back out of a model's reply. Only lines attributed to one of the
+ * people in the scene count, and a reply that does not give at least two is
+ * discarded whole — a half-retold conversation would be worse than none.
+ * @param {string} raw
+ * @param {any[]} speakers
+ */
+function parseSceneLines(raw, speakers) {
+  const byName = new Map();
+  for (const a of speakers) {
+    byName.set(a.name.toLowerCase(), a.id);
+    byName.set(a.name.split(" ")[0].toLowerCase(), a.id);
+  }
+  const out = [];
+  for (const line of String(raw || "").split(/\r?\n/)) {
+    const trimmed = stripScaffolding(line).trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^([^:]{1,24}):\s*(.+)$/);
+    if (!match) continue;
+    const id = byName.get(match[1].trim().toLowerCase());
+    if (!id) continue;
+    const text = cleanReply(match[2].trim(), agentById(world, id), livingAgents(world));
+    if (!text) continue;
+    out.push({ speakerId: id, text: text.slice(0, 200) });
+    if (out.length >= RETELL_MAX_LINES) break;
+  }
+  return out;
+}
+
+/**
+ * Offer the freshest conversation the world has had to the model, once a tick at
+ * most. The engine's own judgment is the fallback and the default; this is the
+ * one place the app spends a call on something other than a moment, and it is
+ * the keeper's switch to make.
+ */
+async function retellNewestScene() {
+  if (sceneRetelling || replay || !settings.retell || !hasKey()) return false;
+  const newest = world.events.find(e =>
+    e.scene && e.scene.length && !e.authored && (e.significance || 0) >= RETELL_FLOOR
+    && e.tick >= world.clock.tick - 2 && !retold[e.id]);
+  if (!newest) return false;
+  sceneRetelling = true;
+  try {
+    return await retellScene(newest);
+  } finally {
+    sceneRetelling = false;
   }
 }
 
@@ -1144,7 +1864,10 @@ function renderRecord() {
           (Math.abs(m.delta) < 0.05 ? "·" : (m.delta > 0 ? "+" : "\u2212") + Math.abs(m.delta)) + "</span></span>"
         ).join("") + "</div>" +
         (lastDigest.headline ? '<p class="note">The biggest thing: ' + esc(lastDigest.headline.text) + "</p>" : "") +
-        '<button class="btn ghost small digest-dismiss">I have read it</button>';
+        '<div class="row">' +
+        '<button class="btn ghost small digest-replay">▶ Watch it again</button>' +
+        '<button class="btn ghost small digest-dismiss">I have read it</button>' +
+        "</div>";
       pane.appendChild(away);
     }
     // The mourning chronicle comes first when there is one: what the world has
@@ -2406,6 +3129,21 @@ function startMapLoop() {
 }
 
 /* New events shimmer on the map: a ripple at the actor, a wisp for the momentous. */
+/** One ripple at whoever an event happened to — and a wisp if it was momentous. */
+function rippleForEvent(e) {
+  const a = e.agentId ? agentById(world, e.agentId) : null;
+  const p = a ? mapPos(a) : { x: 50, y: 50 };
+  mapFx.ripples.push({
+    x: (p.x / 100) * mapFx.w, y: (p.y / 100) * mapFx.h,
+    t0: performance.now(), color: a ? a.color : "#9a9aa8"
+  });
+  if ((e.significance || 0) >= 0.7) {
+    const x0 = Math.random() * mapFx.w;
+    mapFx.wisps.push({ x0, y0: -10, x1: x0 - 90 - Math.random() * 60, y1: 90 + Math.random() * 60, t0: performance.now() });
+  }
+  if (mapFx.ripples.length > 24) mapFx.ripples.splice(0, mapFx.ripples.length - 24);
+}
+
 function noteMapFx() {
   if (!world || !world.events.length) return;
   if (!mapFx.fxInit) {
@@ -2420,19 +3158,7 @@ function noteMapFx() {
   }
   if (!fresh.length) return;
   mapFx.lastFxSeq = Math.max(mapFx.lastFxSeq, ...fresh.map(e => e.seq));
-  for (const e of fresh.reverse()) {
-    const a = e.agentId ? agentById(world, e.agentId) : null;
-    const p = a ? mapPos(a) : { x: 50, y: 50 };
-    mapFx.ripples.push({
-      x: (p.x / 100) * mapFx.w, y: (p.y / 100) * mapFx.h,
-      t0: performance.now(), color: a ? a.color : "#9a9aa8"
-    });
-    if ((e.significance || 0) >= 0.7) {
-      const x0 = Math.random() * mapFx.w;
-      mapFx.wisps.push({ x0, y0: -10, x1: x0 - 90 - Math.random() * 60, y1: 90 + Math.random() * 60, t0: performance.now() });
-    }
-  }
-  if (mapFx.ripples.length > 24) mapFx.ripples.splice(0, mapFx.ripples.length - 24);
+  for (const e of fresh.reverse()) rippleForEvent(e);
 }
 
 function renderMap() {
@@ -3147,6 +3873,12 @@ function loadAdmin() {
       : "This app is keeping its own world — time missed while it was closed is paid back on launch, up to " +
         CATCHUP_MAX_HOURS + " hours.";
   }
+  const directorBox = /** @type {HTMLInputElement|null} */ ($("set-director"));
+  if (directorBox) directorBox.checked = !!settings.director;
+  const soundBox = /** @type {HTMLInputElement|null} */ ($("set-sound"));
+  if (soundBox) soundBox.checked = isSoundOn(settings);
+  const retellBox = /** @type {HTMLInputElement|null} */ ($("set-retell"));
+  if (retellBox) retellBox.checked = !!settings.retell;
   $("btn-import-world").disabled = serviceMode;
   $("backup-status").textContent = serviceMode
     ? "The background service owns this world. Download a backup here, but stop the service before restoring one."
@@ -3183,7 +3915,7 @@ function renderSpeeds() {
     b.innerHTML = esc(s.label) + "<small>" + esc(s.note) + "</small>";
     b.addEventListener("click", () => {
       settings.tickSeconds = s.secs;
-      save(); armTick(); renderSpeeds();
+      save(); syncTickPace(); renderSpeeds();
       $("speed-note").textContent = "Saved. A tick every " + s.secs + " seconds — " + s.note + ".";
     });
     row.appendChild(b);
@@ -3214,11 +3946,19 @@ function saveAdmin() {
   // paste, and https is the only sane default for a host that is not yours.
   settings.serviceUrl = rawService && !/^https?:\/\//i.test(rawService) ? "https://" + rawService : rawService;
   $("set-service").value = settings.serviceUrl;
-  save(); armTick(); renderAll();
+  // The pace switches are read here too, so "Save settings" can never quietly
+  // undo a checkbox the keeper just ticked.
+  const directorBox = /** @type {HTMLInputElement|null} */ ($("set-director"));
+  if (directorBox) settings.director = !!directorBox.checked;
+  const soundBox = /** @type {HTMLInputElement|null} */ ($("set-sound"));
+  if (soundBox) setSoundOn(settings, !!soundBox.checked);
+  const retellBox = /** @type {HTMLInputElement|null} */ ($("set-retell"));
+  if (retellBox) settings.retell = !!retellBox.checked;
+  save(); syncTickPace(); renderAll();
   const call = activeCall();
   $("admin-status").textContent = call
     ? "Saved. " + (call.model || "The model") + " via " + call.provider.label + " now writes the world's biggest moments. First tick in ~" +
-      (settings.tickSeconds || 45) + "s, or press One tick."
+      currentTickSeconds() + "s, or press One tick."
     : "Saved. The world keeps running on its own — no key needed.";
 }
 
@@ -3279,7 +4019,9 @@ async function restoreWorldBackup(file) {
       return;
     }
 
+    stopReplay();
     world = restored;
+    lastSeenTick = null;
     chats = {};
     chatRoles = {};
     ui = { ...ui, selectedId: null, chatId: null, record: "feed", threadKind: "mind", threadTarget: null };
@@ -3289,7 +4031,7 @@ async function restoreWorldBackup(file) {
     mapFx.wisps.length = 0;
     lastSeenAt = Date.now();
     save();
-    armTick();
+    syncTickPace();
     renderAll();
     status.textContent = "Backup restored — " + describeClock(world.clock) + ", seed " + world.seed + ".";
   } catch (error) {
@@ -3299,6 +4041,7 @@ async function restoreWorldBackup(file) {
 
 function advance(ticks) {
   if (serviceMode) { toast("The background world sets its own pace — it is not ours to fast-forward."); return; }
+  stopReplay();
   advanceOffline(ticks);
   save(); mapFx.fxInit = false; renderAll();
   toast("The world ran " + ticks + " ticks ahead — " + describeClock(world.clock) + ".");
@@ -3313,9 +4056,11 @@ function resetWorld() {
   mapFx.ripples.length = 0;
   mapFx.wisps.length = 0;
   lastSeenAt = Date.now();
+  lastSeenTick = null;
+  stopReplay();
   runTicks(world, OPENING_TICKS);
   settleMoments(world.pending.slice());
-  save(); armTick(); renderAll();
+  save(); syncTickPace(); renderAll();
   showPicker();
   toast("A new world. Nine minds, no history, and " + OPENING_TICKS + " ticks already behind them.");
 }
@@ -3350,6 +4095,12 @@ function renderAll() {
   credit("day", world.clock.day);
   renderKeeperStrip();
   renderNow(); renderWant(); renderHand(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderFeed();
+  renderToday();
+  renderTimeline();
+  // The director reads the world after it has been drawn, so the pace and the
+  // board always describe the same world the keeper is looking at.
+  renderDirector();
+  presentBeats();
   renderAgents(); renderAdminWorld();
   const selected = ui.selectedId ? agentById(world, ui.selectedId) : null;
   if (selected && !$("mind-sheet").classList.contains("hidden")) {
@@ -3410,17 +4161,22 @@ function catchUp() {
 document.addEventListener("DOMContentLoaded", async () => {
   // The keeper's own settings first: the world they watch may be kept at an
   // address only their save knows about.
-  const { fresh } = load();
+  const { fresh, seen } = load();
   const serviceWorld = await probeService();
   initCanvas();
 
   // A brand-new world should not open as an empty map.
   let seeded = 0;
+  // Whether the world the keeper last looked at is the world being served now.
+  // A keeper pointing the app at somebody else's world has missed nothing in it:
+  // the ticks in between belong to the world they left behind.
+  let sameServedWorld = false;
   if (serviceWorld) {
     // The service has been living this world all along: adopt it as it is. If
     // the keeper had a world of their own before this, the gap between the two
     // is what happened to it while they were gone.
     const previouslySeen = fresh ? null : digestMark(world);
+    sameServedWorld = !fresh && world.seed === serviceWorld.seed;
     world = serviceWorld;
     serviceMode = true;
     serviceLost = false;
@@ -3457,10 +4213,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   // Either way the world has moved, so the save has to catch up with it: a
   // keeper who opens the app and immediately closes it should not lose the
-  // two days the world just lived.
+  // two days the world just lived. `seen` — not the mark the saves below move —
+  // is what the replay is measured from: a first run has missed nothing.
+  const missedFrom = seen;
   save();
 
   startMapLoop();
+  setWatching(!!settings.watching, { quiet: true });
+  if (isSoundOn(settings)) armSound();
 
   document.querySelectorAll(".tab").forEach(t =>
     t.addEventListener("click", () => switchTab(t.dataset.tab)));
@@ -3524,6 +4284,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
+    const replayDigest = target?.closest(".digest-replay");
+    if (replayDigest) {
+      // The ticks the digest is *about*: from where the keeper last stood to
+      // where the world is now. The record keeps every line, so this is the
+      // world's own history read back, not a retelling of it.
+      const from = Number.isFinite(lastSeenTick) ? /** @type {number} */ (lastSeenTick) : world.clock.tick - REPLAY_MAX_FRAMES;
+      const film = replayFrames(world, { fromTick: from, ticks: world.clock.tick - from, maxFrames: REPLAY_MAX_FRAMES });
+      if (!film.frames.length) { toast("Nothing worth replaying yet — it is all still ahead of you."); return; }
+      switchTab("world");
+      startReplay(film);
+      return;
+    }
+
     const memorialMind = target?.closest(".mem-mind");
     if (memorialMind) {
       openSheet(/** @type {any} */ (memorialMind).dataset.mind);
@@ -3540,6 +4313,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-do-create").addEventListener("click", doCreate);
   $("btn-cancel-create").addEventListener("click", closeCreate);
   $("more-feed").addEventListener("click", () => { switchTab("record"); ui.record = "feed"; renderRecord(); });
+  $("beat-banner").addEventListener("click", () => { if (replay) skipReplay(); else hideBeat(); });
   $("keeper-strip").addEventListener("click", () => { ui.record = "keeper"; save(); switchTab("record"); });
   $("hand-card").addEventListener("click", ev => {
     const btn = /** @type {HTMLElement|null} */ (ev.target)?.closest(".hand-act");
@@ -3573,6 +4347,32 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("chat-send").addEventListener("click", sendChat);
   $("chat-input").addEventListener("keydown", e => { if (e.key === "Enter") sendChat(); });
   $("btn-save-admin").addEventListener("click", saveAdmin);
+  $("set-director").addEventListener("change", ev => {
+    settings.director = !!ev.target.checked;
+    save(); syncTickPace(); renderAll();
+    $("admin-status").textContent = settings.director
+      ? "The world sets its own pace now — brisk while something is live, easy once it settles."
+      : "The world runs at your pace: " + currentTickSeconds() + " seconds a tick.";
+  });
+  $("set-sound").addEventListener("change", ev => {
+    setSoundOn(settings, !!ev.target.checked);
+    save();
+    $("admin-status").textContent = settings.sound
+      ? "Sound on. A chime for a moment, a buzz for a beat."
+      : "Sound off.";
+  });
+  $("set-retell").addEventListener("change", ev => {
+    settings.retell = !!ev.target.checked;
+    save();
+    $("admin-status").textContent = settings.retell
+      ? (hasKey() ? "Conversations will be rewritten as they happen." : "Saved — this needs a key before it can do anything.")
+      : "The engine writes the conversations again.";
+  });
+  $("btn-sound-test").addEventListener("click", () => {
+    // Called from a gesture, so it may open the audio context itself.
+    sting("moment", { settings, force: true });
+    $("admin-status").textContent = "That is what a moment sounds like.";
+  });
   $("set-provider").addEventListener("change", syncProviderFields);
   $("btn-service-check").addEventListener("click", () => { void checkServiceNow(); });
   $("btn-export-world").addEventListener("click", downloadWorldBackup);
@@ -3589,6 +4389,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (file) await restoreWorldBackup(file);
     input.value = "";
   });
+  $("btn-watch").addEventListener("click", () => setWatching(!settings.watching));
+  $("timeline").addEventListener("click", ev => {
+    const seg = /** @type {HTMLElement|null} */ (ev.target)?.closest("[data-tick]");
+    if (seg) replayFromTick(/** @type {HTMLElement} */ (seg).dataset.tick);
+  });
+  $("storylines").addEventListener("click", ev => {
+    const target = /** @type {HTMLElement|null} */ (ev.target)?.closest("[data-story]");
+    if (target) openStoryline(/** @type {HTMLElement} */ (target).dataset.story);
+  });
   $("btn-tick").addEventListener("click", () => tick(true).then(() => renderAll()));
   $("btn-advance").addEventListener("click", () => advance(48));
   $("btn-advance-week").addEventListener("click", () => advance(336));
@@ -3601,8 +4410,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   renderAll();
   if (fresh || !welcomedBefore()) showWelcome(seeded > 0);
-  armTick();
+  syncTickPace();
   if (serviceMode) startServicePolling();
+  // The world moved while this app was closed. Rather than only saying so, show
+  // it: a short replay of the ticks that were missed, then straight into live.
+  if (!serviceMode || sameServedWorld) maybeReplayMissed(missedFrom);
   // Persist the moment we started looking, so the next launch knows the gap.
   window.addEventListener("beforeunload", save);
   document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
