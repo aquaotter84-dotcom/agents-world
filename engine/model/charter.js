@@ -103,6 +103,8 @@ import { clamp } from "../config.js";
  * @property {number} rulingsMade
  * @property {number} [nextDilemmaTick]   Tick at which the engine may raise another dilemma.
  * @property {number} [lastInfluenceTick] Tick influence was last regenerated.
+ * @property {number} [chatInfluenceDay]  World day of the latest chat-reward tally.
+ * @property {number} [chatInfluenceRewardsToday] Successful chats rewarded on that day.
  * @property {number} [wallRaisedTick]
  * @property {boolean} wallRaised     The shared win condition, once met.
  * @property {number} [wallRaisedTick]
@@ -146,6 +148,8 @@ export function createCharter() {
     whispers: [],
     active: {},
     rulingsMade: 0,
+    chatInfluenceDay: 1,
+    chatInfluenceRewardsToday: 0,
     wallRaised: false
   };
 }
@@ -175,6 +179,12 @@ export function normalizeCharter(raw) {
     whispers: list(c.whispers),
     active: c.active && typeof c.active === "object" ? c.active : {},
     rulingsMade: Number.isFinite(c.rulingsMade) ? c.rulingsMade : 0,
+    chatInfluenceDay: Number.isFinite(c.chatInfluenceDay)
+      ? Math.max(1, Math.floor(c.chatInfluenceDay))
+      : base.chatInfluenceDay,
+    chatInfluenceRewardsToday: Number.isFinite(c.chatInfluenceRewardsToday)
+      ? Math.max(0, Math.floor(c.chatInfluenceRewardsToday))
+      : base.chatInfluenceRewardsToday,
     wallRaised: Boolean(c.wallRaised)
   };
 }

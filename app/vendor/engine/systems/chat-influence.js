@@ -19,9 +19,12 @@
  *     suggestedGoal; the engine gives the mind a small per-tick chance to
  *     adopt it, announced in the feed.
  *  6. Company — talking is company: a little connection need is satisfied.
+ *  7. Influence — a successful exchange earns a point, up to four chat rewards
+ *     per world day, so conversation builds reach without becoming farmable.
  */
 
 import { clamp } from "../config.js";
+import { moveInfluence } from "../model/charter.js";
 import { remember } from "../model/memory.js";
 import { adjustEdge } from "../model/relationships.js";
 import { logEvent } from "../model/events.js";
@@ -188,12 +191,43 @@ function guessGoalKind(text) {
 }
 
 /**
+ * A real exchange with the keeper earns a little more reach in the world. The
+ * daily reward limit keeps repeated messages from becoming an infinite resource
+ * loop, while leaving the conversation's other effects untouched.
+ * @param {import("../model/world.js").World} world
+ * @param {string} text
+ * @returns {number} Influence actually added.
+ */
+function earnChatInfluence(world, text) {
+  const charter = world.charter;
+  if (!charter || !String(text || "").trim()) return 0;
+
+  const cfg = world.config.charter;
+  const amount = Math.max(0, Number(cfg.influencePerChat) || 0);
+  const dailyLimit = Math.max(0, Math.floor(Number(cfg.influenceChatRewardsPerDay) || 0));
+  if (amount <= 0 || dailyLimit <= 0) return 0;
+
+  const day = Number.isFinite(world.clock.day) ? Math.max(1, Math.floor(world.clock.day)) : 1;
+  if (charter.chatInfluenceDay !== day) {
+    charter.chatInfluenceDay = day;
+    charter.chatInfluenceRewardsToday = 0;
+  }
+  const rewards = Math.max(0, Math.floor(charter.chatInfluenceRewardsToday || 0));
+  if (rewards >= dailyLimit || charter.influence >= charter.influenceMax) return 0;
+
+  const gained = moveInfluence(charter, amount);
+  if (gained > 0) charter.chatInfluenceRewardsToday = rewards + 1;
+  return gained;
+}
+
+/**
  * @typedef {object} ChatInfluenceReport
  * @property {number} sentiment        Raw lexicon score.
  * @property {"warm" | "cold" | "neutral"} kind
  * @property {number} moodShift        Applied to moodLevel (0 when neutral).
  * @property {string[]} mentionedIds   Other minds named in the message.
  * @property {boolean} goalSeeded      A directive was stored as suggestedGoal.
+ * @property {number} influenceGained  Influence earned by this successful chat exchange.
  */
 
 /**
@@ -203,13 +237,12 @@ function guessGoalKind(text) {
  * @param {import("../model/world.js").World} world
  * @param {import("../model/agent.js").Agent} agent  The mind Jeremy talked to.
  * @param {string} userText   Jeremy's message.
- * @param {string} replyText  The mind's reply (kept for future use; the reply
- *                            itself doesn't shift the world, Jeremy's words do).
+ * @param {string} replyText  A usable reply is required for the exchange to earn
+ *                            influence; the reply itself doesn't shift the world.
  * @param {string} [roleId]   The keeper role worn for this chat.
  * @returns {ChatInfluenceReport}
  */
 export function applyChatInfluence(world, agent, userText, replyText, roleId) {
-  void replyText;
   const tick = world.clock.tick;
   const text = String(userText || "");
   const sentiment = scoreSentiment(text);
@@ -265,12 +298,18 @@ export function applyChatInfluence(world, agent, userText, replyText, roleId) {
   agent.needs.connection = clamp(
     agent.needs.connection + needGain(agent.needs.connection, 6), 0, 100);
 
+  // The reward is message-agnostic — even a neutral or difficult exchange can
+  // carry weight — but an empty message, failed reply or spent daily allowance
+  // pays nothing.
+  const influenceGained = String(replyText || "").trim() ? earnChatInfluence(world, text) : 0;
+
   return {
     sentiment,
     kind,
     moodShift,
     mentionedIds: mentioned.map(m => m.id),
-    goalSeeded
+    goalSeeded,
+    influenceGained
   };
 }
 

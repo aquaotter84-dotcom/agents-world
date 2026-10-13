@@ -1537,6 +1537,34 @@ function wantPanelHtml() {
  * so the panel below says the price, the target and the reason it cannot be
  * done, and nothing is ever hidden behind an unavailable button. */
 
+/** The chat reward, shared by the World screen and the conversation view. */
+function chatInfluenceHint() {
+  const charter = world.charter;
+  const cfg = world.config.charter;
+  const reward = Math.max(0, Number(cfg.influencePerChat) || 0);
+  const dailyLimit = Math.max(0, Math.floor(Number(cfg.influenceChatRewardsPerDay) || 0));
+  if (!charter || reward <= 0 || dailyLimit <= 0) {
+    return "Successful conversations do not currently award influence.";
+  }
+
+  const day = Number.isFinite(world.clock.day) ? world.clock.day : 1;
+  const used = charter.chatInfluenceDay === day
+    ? Math.max(0, Math.floor(Number(charter.chatInfluenceRewardsToday) || 0))
+    : 0;
+  const influence = Math.round(charter.influence);
+  const max = Math.round(charter.influenceMax);
+  if (used >= dailyLimit) {
+    return "You've earned all " + dailyLimit + " chat influence reward" +
+      (dailyLimit === 1 ? "" : "s") + " for today; they reset tomorrow.";
+  }
+  if (charter.influence >= charter.influenceMax) {
+    return "Influence is full (" + influence + "/" + max + "). Spend some; up to " + dailyLimit +
+      " successful chat exchange" + (dailyLimit === 1 ? "" : "s") + " can then earn +" + reward + " today.";
+  }
+  return "Up to " + dailyLimit + " successful chat exchange" + (dailyLimit === 1 ? "" : "s") +
+    " each world day can earn +" + reward + " influence (" + used + "/" + dailyLimit + " earned today).";
+}
+
 /** Where a point on the board sits, in regions: the omen's aim. */
 function regionAtPoint(x, y) {
   if (!mapFx.w || !mapFx.h) return null;
@@ -1635,6 +1663,7 @@ function renderHand() {
     '<div class="hand-head"><p class="eyebrow">Your hand</p>' +
     '<span class="hand-influence">' + Math.round(world.charter?.influence ?? 0) + " influence</span></div>" +
     '<div class="hand-acts">' + rows + "</div>" +
+    '<p class="hand-chat">' + esc(chatInfluenceHint()) + "</p>" +
     '<p class="hand-foot">' + (last
       ? "Last: " + esc(last.effect)
       : "Hold the board to aim these: a mind to bless, a region for a sign, a dilemma to stand in.") + "</p>";
@@ -1690,6 +1719,7 @@ function renderCharter(pane) {
     '<h3>' + Math.round(charter.influence) + " influence</h3>" +
     '<div class="ks-bar"><span style="width:' + pct + '%"></span></div>' +
     '<p class="note">' + esc(influenceWord(charter)) + '</p>' +
+    '<p class="note">' + esc(chatInfluenceHint()) + '</p>' +
     '<p class="note">Spend it from the World screen — a blessing on a mind or the wall, an omen over a ' +
     'region, an apparition at a dilemma. Hold the board to aim one.</p>' +
     '<p class="note">' + charter.rules.length + " enacted · " + charter.roles.length +
@@ -3817,6 +3847,8 @@ function renderChatLog() {
     p.textContent = "Add a BluesMinds API key in Admin to talk with " + (a ? a.name : "this mind") + ".";
     log.appendChild(p);
   }
+  const influenceNote = $("chat-influence-note");
+  if (influenceNote) influenceNote.textContent = chatInfluenceHint();
   log.scrollTop = log.scrollHeight;
 }
 async function sendChat() {
@@ -3834,17 +3866,29 @@ async function sendChat() {
   typing.className = "typing"; typing.textContent = a.name + " is thinking…";
   $("chat-log").appendChild(typing);
   $("chat-log").scrollTop = $("chat-log").scrollHeight;
+  let completed = false;
+  let influenceGained = 0;
   try {
     const reply = await mindReplies(a, hist, chatRoles[a.id]);
-    // The chat happened: let Jeremy's words change the world.
-    applyChatInfluence(world, a, text, reply, chatRoles[a.id]);
+    // The chat happened: let Jeremy's words change the world and build reach.
+    const report = applyChatInfluence(world, a, text, reply, chatRoles[a.id]);
+    influenceGained = report.influenceGained;
+    completed = true;
     hist.push({ role: "assistant", content: reply, ts: Date.now() });
     if (hist.length > 100) hist.splice(0, hist.length - 100);
   } catch (err) {
     const misfire = String(err && err.message) === "misfire";
     hist.push({ role: "assistant", content: misfire ? "(" + a.name + "'s thoughts scatter — say that again.)" : "(couldn't reach " + a.name + ": " + String(err.message || err).slice(0, 120) + ")", ts: Date.now() });
   }
-  save(); renderChatLog();
+  save();
+  if (completed) {
+    renderAll();
+    if (influenceGained > 0) {
+      toast("Your conversation with " + esc(a.name) + " builds your influence: +" + influenceGained + ".");
+    }
+  } else {
+    renderChatLog();
+  }
 }
 
 /* ---------- admin ---------- */
