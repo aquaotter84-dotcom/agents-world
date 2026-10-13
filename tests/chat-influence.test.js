@@ -22,6 +22,7 @@ import {
 import { edgeToward } from "../engine/model/relationships.js";
 import { moodWord } from "../engine/model/agent.js";
 import { recall } from "../engine/model/memory.js";
+import { serializeWorld, deserializeWorld } from "../engine/snapshot.js";
 import { step } from "../engine/simulation.js";
 
 /** Two fresh minds from a fresh world. */
@@ -106,6 +107,53 @@ test("keeper roles modulate the shift a little", () => {
   const spirit = twoMinds(5);
   const rSpirit = applyChatInfluence(spirit.world, spirit.a, "you are wonderful and kind", "r", "spirit");
   assert.ok(rSpirit.moodShift > rPlain2.moodShift, "a Spirit's comfort soothes more");
+});
+
+test("successful chats build influence, with a daily cap that survives reload", () => {
+  const difficult = twoMinds(12);
+  const cold = applyChatInfluence(difficult.world, difficult.a, "I hate this cruel day, but I am listening.", "I hear you.");
+  assert.equal(cold.influenceGained, 1, "influence rewards the exchange, not a sentiment score");
+
+  const { world, a } = twoMinds(13);
+  const startingInfluence = world.charter.influence;
+  const dailyLimit = world.config.charter.influenceChatRewardsPerDay;
+
+  for (let i = 0; i < dailyLimit; i++) {
+    const report = applyChatInfluence(world, a, `A quiet exchange, number ${i + 1}.`, "I hear you.");
+    assert.equal(report.influenceGained, world.config.charter.influencePerChat,
+      "even a neutral conversation carries the keeper's reach");
+  }
+  assert.equal(world.charter.influence, startingInfluence + dailyLimit);
+  assert.equal(world.charter.chatInfluenceRewardsToday, dailyLimit);
+
+  const extra = applyChatInfluence(world, a, "I hate what happened, but I am listening.", "I hear you.");
+  assert.equal(extra.influenceGained, 0, "chat cannot be repeated to farm more than the daily allowance");
+  assert.equal(world.charter.influence, startingInfluence + dailyLimit);
+
+  const restored = deserializeWorld(serializeWorld(world));
+  assert.equal(restored.charter.chatInfluenceRewardsToday, dailyLimit, "the allowance is part of the world save");
+  const restoredMind = restored.agents.find(agent => agent.id === a.id);
+  assert.ok(restoredMind);
+  restored.clock.day += 1;
+  const tomorrow = applyChatInfluence(restored, restoredMind, "A new day, a new conversation.", "Good morning.");
+  assert.equal(tomorrow.influenceGained, world.config.charter.influencePerChat);
+  assert.equal(restored.charter.chatInfluenceRewardsToday, 1, "the daily reward allowance resets with the world day");
+});
+
+test("empty messages and a full influence reserve earn nothing", () => {
+  const { world, a } = twoMinds(14);
+  const before = world.charter.influence;
+  const empty = applyChatInfluence(world, a, "   ", "reply");
+  assert.equal(empty.influenceGained, 0);
+  const unanswered = applyChatInfluence(world, a, "A message with no successful reply.", "   ");
+  assert.equal(unanswered.influenceGained, 0, "a failed exchange does not pay influence");
+  assert.equal(world.charter.influence, before);
+
+  world.charter.influence = world.charter.influenceMax;
+  const full = applyChatInfluence(world, a, "A real exchange, but there is no room left.", "reply");
+  assert.equal(full.influenceGained, 0);
+  assert.equal(world.charter.chatInfluenceRewardsToday, 0,
+    "a full reserve does not waste today's reward opportunity if influence is spent later");
 });
 
 /* ---------- memory ---------- */

@@ -528,6 +528,10 @@ export const DEFAULT_CONFIG = {
     petitionLapseTicks: 96,
     /** Influence regained per day kept, up to the cap. */
     influencePerDay: 4,
+    /** Influence earned for each successful keeper-to-mind chat exchange. */
+    influencePerChat: 1,
+    /** Maximum successful chat exchanges that can earn influence per world day. */
+    influenceChatRewardsPerDay: 4,
     /** Influence granted for ruling on a petition, enacted or not. */
     influencePerRuling: 3,
     whispersEnabled: true,

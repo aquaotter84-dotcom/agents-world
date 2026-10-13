@@ -173,6 +173,41 @@ test("the world is alive before any model is attached", async () => {
   } finally { restore(); }
 });
 
+test("a successful message visibly builds the keeper's influence", async () => {
+  const { createWorld, serializeWorld } = await import("../engine/index.js");
+  const world = createWorld({ seed: 149 });
+  const before = world.charter.influence;
+  const savedState = {
+    world: serializeWorld(world),
+    settings: { provider: "gemini", keys: { gemini: "test-key" } },
+    chats: {}, chatRoles: {}, ui: {}, lastSeenAt: Date.now()
+  };
+  const app = await bootApp({ savedState, modelReply: "I am glad you came by; the evening is quiet." });
+  try {
+    const { document: doc, window } = app;
+    assert.match(text(doc, "hand-card"), /up to 4 successful chat exchanges each world day can earn \+1 influence/i,
+      "the World screen explains how to grow the resource");
+
+    doc.querySelector('.tab[data-tab="messages"]').click();
+    doc.querySelector("#chat-picker .agent-row").click();
+    assert.match(text(doc, "chat-influence-note"), /up to 4 successful chat exchanges/i,
+      "the conversation view repeats the reward rule");
+
+    doc.getElementById("chat-input").value = "I am glad to hear from you.";
+    doc.getElementById("chat-send").click();
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    const saved = JSON.parse(window.localStorage.getItem("agentsworld.v2"));
+    const savedWorld = JSON.parse(saved.world);
+    assert.equal(savedWorld.charter.influence, before + 1, "the completed exchange increases spendable influence");
+    assert.equal(savedWorld.charter.chatInfluenceRewardsToday, 1, "the daily reward is recorded");
+    assert.match(text(doc, "chat-influence-note"), /1\/4 earned today/,
+      "the chat screen reports the updated daily count");
+    assert.match(text(doc, "toast"), /\+1/,
+      "the keeper gets immediate feedback when the reward lands");
+  } finally { app.restore(); }
+});
+
 test("a tick with no model still moves the world and narrates it", async () => {
   const { document: doc, restore } = await bootApp();
   try {
