@@ -84,7 +84,11 @@ jobs:
           # over the last one (fresh CI machines would otherwise mint a
           # throwaway key each run and Android would refuse the "update").
           mkdir -p ~/.android
-          cp ../debug.keystore ~/.android/debug.keystore
+          # The keystore sits beside this workflow's workspace (deploy/),
+          # NOT one level up — the original PR #9 step used ../debug.keystore,
+          # which never existed; the step only stayed green because the live
+          # .github copy of this workflow never received it (see PR #13).
+          cp debug.keystore ~/.android/debug.keystore
           # versionCode must rise for Android to accept the update.
           sed -i -E "s/versionCode [0-9]+/versionCode ${GITHUB_RUN_NUMBER}/" android/app/build.gradle
           sed -i -E "s/versionName \"[^\"]+\"/versionName \"1.0.${GITHUB_RUN_NUMBER}\"/" android/app/build.gradle
