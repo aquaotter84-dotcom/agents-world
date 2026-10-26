@@ -1,6 +1,8 @@
 # Build Agents World APK
 #
-# Debug job runs on every push; builds an unsigned debug APK, no secrets needed.
+# Debug job runs on every push; builds a debug APK signed with the pinned
+# debug key (deploy/debug.keystore), no secrets needed — every build
+# installs as an update over the last one.
 # (v1 ships debug-only, like Orbit's flow. A signed release job can be added later.)
 #
 # Layout this workflow assumes:
@@ -75,6 +77,22 @@ jobs:
 
       - name: Sync Capacitor Android project
         run: npx cap sync android
+
+      - name: Pin debug signing key and bump version
+        run: |
+          # The pinned debug key makes every CI build install as an update
+          # over the last one (fresh CI machines would otherwise mint a
+          # throwaway key each run and Android would refuse the "update").
+          mkdir -p ~/.android
+          # The keystore sits beside this workflow's workspace (deploy/),
+          # NOT one level up — the original PR #9 step used ../debug.keystore,
+          # which never existed; the step only stayed green because the live
+          # .github copy of this workflow never received it (see PR #13).
+          cp debug.keystore ~/.android/debug.keystore
+          # versionCode must rise for Android to accept the update.
+          sed -i -E "s/versionCode [0-9]+/versionCode ${GITHUB_RUN_NUMBER}/" android/app/build.gradle
+          sed -i -E "s/versionName \"[^\"]+\"/versionName \"1.0.${GITHUB_RUN_NUMBER}\"/" android/app/build.gradle
+          grep -E "versionCode|versionName" android/app/build.gradle
 
       - name: Build debug APK
         run: cd android && ./gradlew assembleDebug
