@@ -30,7 +30,7 @@ test("providerById falls back to the first provider on unknown ids", () => {
 test("fresh settings default to Gemini with its default model", () => {
   const s = normalizeSettings({});
   assert.equal(s.provider, "gemini");
-  assert.equal(s.models.gemini, "gemini-2.5-flash");
+  assert.equal(s.models.gemini, "gemini-3.5-flash-lite");
   assert.equal(s.tickSeconds, 45);
 });
 
@@ -84,7 +84,7 @@ test("providerCallOf resolves the active provider's url, model and key", () => {
   const s = normalizeSettings({ provider: "gemini", keys: { gemini: "  AIKEY " } });
   const call = providerCallOf(s);
   assert.equal(call.url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
-  assert.equal(call.model, "gemini-2.5-flash");
+  assert.equal(call.model, "gemini-3.5-flash-lite");
   assert.equal(call.key, "AIKEY");
 });
 

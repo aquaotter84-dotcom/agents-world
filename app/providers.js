@@ -21,7 +21,7 @@ export const PROVIDERS = [
     url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
     keyUrl: "https://aistudio.google.com/app/apikey",
     keyHint: "Free — a Google account is all it takes.",
-    defaultModel: "gemini-2.5-flash",
+    defaultModel: "gemini-3.5-flash-lite",
     customUrl: false
   },
   {
