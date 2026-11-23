@@ -117,6 +117,10 @@ let keeper = emptyKeeper();
 let trials = null;
 /** The last "while you were away" digest, kept until the keeper has read it. */
 let lastDigest = null;
+/** Focus returns to the board or list button that opened the character sheet. */
+/** @type {HTMLElement|null} */
+let mindActionReturnFocus = null;
+let mapReactionTimer = null;
 
 /* ---------- the background service ----------
  * When the runner (server/index.js) is alive it owns the clock: the world keeps
@@ -1561,7 +1565,7 @@ function runActiveTrial() {
       return need(a) - need(b);
     });
     const target = candidates.find(agent => canIntervene(world, "blessing", { agentId: agent.id }).ok);
-    if (target) tryIntervene("blessing", { agentId: target.id });
+    if (target) openMindActions(target.id);
     else toast("No mind can take another blessing right now. Let the world turn a little.");
     return;
   }
@@ -1787,6 +1791,88 @@ function targetLabel(target) {
   return "";
 }
 
+/* ---------- direct character actions: touch a mind, see the price, change the world ---------- */
+
+/**
+ * One engine-backed action row. The price and refusal come from the same check
+ * the intervention itself uses, so the preview cannot drift from the charge.
+ * @param {"omen"|"blessing"|"apparition"} kind
+ * @param {{regionId?: string|null, agentId?: string|null, dilemmaId?: string|null, work?: boolean}} target
+ * @param {string} label
+ * @param {string} preview
+ */
+function mindInterventionRow(kind, target, label, preview) {
+  const check = canIntervene(world, kind, target);
+  return '<button class="ma-action" data-mind-act="' + kind + '"' + (check.ok ? "" : " disabled") + '>' +
+    '<span class="ma-label">' + esc(label) + '</span>' +
+    '<span class="ma-cost">' + check.cost + ' influence</span>' +
+    '<span class="ma-preview">' + esc(check.ok ? preview : (check.reason || "Not right now.")) + '</span></button>';
+}
+
+/** Render the compact sheet without moving focus while the live world updates. */
+function renderMindActions(a) {
+  const need = pressingNeed(a);
+  const tie = tiesOf(a, 1)[0];
+  $("mind-action-head").innerHTML =
+    '<span class="ma-portrait" style="border-color:' + esc(a.color) + ';box-shadow:0 0 24px ' + esc(a.color) + '44">' +
+    portraitHtml(a) + '</span><div class="ma-identity"><h2 id="mind-action-name">' + esc(a.name) + '</h2>' +
+    '<p>' + esc(a.class) + ' · ' + esc(regionName(world, a.regionId)) + '</p></div>';
+  $("mind-action-now").textContent = doingLine(a);
+  $("mind-action-context").innerHTML =
+    '<div><span>Feeling</span><strong>' + esc(moodWord(a, tickNow())) + '</strong></div>' +
+    '<div><span>Needs</span><strong>' + esc(need.key) + ' · ' + Math.round(need.value) + '/100</strong></div>' +
+    '<div><span>Strongest tie</span><strong>' + esc(tie ? tie.other.name + " · " + tie.word : "still forming") + '</strong></div>';
+
+  const divine = world.config.divine;
+  const blessingTarget = { agentId: a.id };
+  const omenTarget = { regionId: a.regionId };
+  const blessingPreview = 'Up to +' + divine.blessingLift + ' energy & meaning · +' +
+    Math.round(divine.blessingWorkBonus * 100) + '% wall work for ' + divine.blessingWindowTicks + ' ticks.';
+  const omenPreview = 'Quarrels cool by ' + divine.omenCoolPerTick + ' each tick · fights are harder to choose for ' +
+    divine.omenWindowTicks + ' ticks.';
+  const rows = [
+    mindInterventionRow("blessing", blessingTarget, "Leave a blessing", blessingPreview),
+    '<button class="ma-action" data-mind-act="talk"><span class="ma-label">Talk privately</span>' +
+      '<span class="ma-cost">no influence</span><span class="ma-preview">Speak with them directly. Your words can change their relationships.</span></button>',
+    mindInterventionRow("omen", omenTarget, "Set an omen over " + regionName(world, a.regionId), omenPreview)
+  ];
+  const dilemma = (world.charter?.dilemmas || []).find(d => d.status === "open" && d.partyIds.includes(a.id));
+  if (dilemma) {
+    rows.push(mindInterventionRow("apparition", { dilemmaId: dilemma.id }, "Stand between them",
+      'Mutual resentment ' + divine.apparitionResentment + ' · no law or precedent is written.'));
+  }
+  $("mind-action-list").innerHTML = rows.join("");
+}
+
+/** Open a character as a playable choice rather than sending the keeper to a page. */
+function openMindActions(id) {
+  closeRadial();
+  const a = agentById(world, id);
+  if (!a || a.retired) return;
+  const active = document.activeElement;
+  mindActionReturnFocus = active && typeof active.focus === "function" ? /** @type {HTMLElement} */ (active) : null;
+  $("sheet-backdrop").classList.add("hidden");
+  $("mind-sheet").classList.add("hidden");
+  ui.selectedId = id;
+  save();
+  renderStats();
+  renderHand();
+  renderMindActions(a);
+  $("mind-action-backdrop").classList.remove("hidden");
+  $("mind-actions").classList.remove("hidden");
+  $("mind-action-close").focus();
+}
+
+function closeMindActions(restoreFocus = true) {
+  const sheet = $("mind-actions");
+  if (!sheet) return;
+  const wasOpen = !sheet.classList.contains("hidden");
+  sheet.classList.add("hidden");
+  $("mind-action-backdrop")?.classList.add("hidden");
+  if (restoreFocus && wasOpen && mindActionReturnFocus?.isConnected) mindActionReturnFocus.focus();
+  mindActionReturnFocus = null;
+}
+
 /**
  * Spend the influence, and let the world say no in a sentence if it must.
  * @param {"omen"|"blessing"|"apparition"} kind
@@ -1798,6 +1884,10 @@ function tryIntervene(kind, target) {
     toast(result.reason || "You cannot do that.");
     return false;
   }
+  const fromMindActions = !$("mind-actions").classList.contains("hidden");
+  closeRadial();
+  closeMindActions(false);
+  if (fromMindActions) switchTab("world");
   trackTrial(kind === "blessing"
     ? (result.intervention.target === "work" ? "bless-work" : "bless-mind")
     : kind === "apparition" ? "ruling" : kind);
@@ -1805,6 +1895,7 @@ function tryIntervene(kind, target) {
     esc(targetLabel(target)) + " — " + esc(result.intervention.effect));
   save();
   renderAll();
+  showMapReaction(result.intervention);
   return true;
 }
 
@@ -2645,6 +2736,7 @@ const mapFx = {
   sprites: new Map(),  // pre-rendered orb glow sprites by color|state|mood
   sigils: [],          // hit-test cache for petitions, whispers, dilemmas {kind,id,x,y,agentId}
   constellations: [],  // hit-test cache for secret threads {id,x,y,holders}
+  reaction: /** @type {{agentId:string|null,subjectId:string|null,regionId:string|null,t0:number}|null} */ (null),
   lastFxSeq: 0, fxInit: false,
   running: false
 };
@@ -2835,12 +2927,19 @@ function drawOrb(g, a, t, glowBoost) {
   const awake = a.awake && !a.retired;
   mapFx.orbs.push({ id: a.id, x, y });
   const sp = orbSprite(a, moodWord(a, tickNow()));
-  const S = sp.S * pulse;
+  const reaction = mapFx.reaction;
+  const elapsed = reaction ? t - reaction.t0 : -1;
+  const aimed = reaction && (reaction.agentId === a.id || reaction.subjectId === a.id ||
+    (!reaction.agentId && reaction.regionId === a.regionId));
+  const reactionPulse = aimed && elapsed >= 0 && elapsed < 1200
+    ? Math.sin((elapsed / 1200) * Math.PI) * 0.22
+    : 0;
+  const S = sp.S * (pulse + reactionPulse);
   g.save();
   g.globalAlpha = awake ? Math.min(1, 0.88 + glowBoost * 0.3) : 0.5;
   g.drawImage(sp.c, x - S / 2, y - S / 2, S, S);
   g.restore();
-  const R = 19 * pulse;
+  const R = 19 * (pulse + reactionPulse);
   // sigil
   g.save();
   g.fillStyle = awake ? "#fff" : "#8a8a96";
@@ -3496,6 +3595,43 @@ function renderMap() {
   sizeCanvas();
 }
 
+/** A brief answer where the act landed: the mind pulses, then speaks in a bubble. */
+function showMapReaction(intervention) {
+  const el = $("map-reaction");
+  if (!el || !intervention) return;
+  const a = intervention.agentId ? agentById(world, intervention.agentId) : null;
+  const at = a ? orbXY(a, performance.now()) : regionXY(intervention.regionId, -20);
+  if (!at) return;
+  const title = intervention.kind === "blessing"
+    ? (a ? a.name + " feels the light." : "The wall catches the light.")
+    : intervention.kind === "omen"
+      ? "A sign hangs over " + regionName(world, intervention.regionId) + "."
+      : "The quarrel loosens.";
+  const detail = intervention.kind === "blessing"
+    ? "Spirits lifted · work strengthened"
+    : intervention.kind === "omen" ? "Quarrels cool under it" : "Resentment falls · no law written";
+  el.innerHTML = '<strong>' + esc(title) + '</strong><span>' + esc(detail) + '</span>';
+  el.style.left = Math.max(104, Math.min(mapFx.w - 104, at.x)) + "px";
+  el.style.top = Math.max(76, Math.min(mapFx.h - 20, at.y - 30)) + "px";
+  el.classList.remove("hidden");
+  // Restart only this transient animation when two valid acts land in succession.
+  el.classList.remove("show");
+  void el.offsetWidth;
+  el.classList.add("show");
+  const reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  mapFx.reaction = reduced ? null : {
+    agentId: intervention.agentId || null,
+    subjectId: intervention.subjectId || null,
+    regionId: intervention.regionId || null,
+    t0: performance.now()
+  };
+  if (mapReactionTimer) clearTimeout(mapReactionTimer);
+  mapReactionTimer = setTimeout(() => {
+    el.classList.add("hidden");
+    el.classList.remove("show");
+  }, 2600);
+}
+
 function initCanvas() {
   const cv = $("world-canvas");
   if (!cv || mapFx.cv) return;
@@ -3504,9 +3640,8 @@ function initCanvas() {
   seedMotes();
   sizeCanvas();
   new ResizeObserver(() => sizeCanvas()).observe($("map"));
-  // A tap opens the dossier. A tap-and-hold anywhere on the board opens the
-  // radial menu, so the keeper's four moves are one gesture from any mind
-  // without ever leaving the map.
+  // A tap opens direct character actions with their real prices and effects.
+  // A tap-and-hold still opens the wider keeper menu without leaving the map.
   let holdTimer = 0;
   let holdFired = false;
   let startX = 0, startY = 0;
@@ -3558,7 +3693,7 @@ function initCanvas() {
     if (Math.hypot(at.x - startX, at.y - startY) > 12) return;
     const hit = hitTest(at.x, at.y);
     if (!hit) { closeRadial(); return; }
-    if (hit.kind === "mind") openSheet(hit.id);
+    if (hit.kind === "mind") openMindActions(hit.id);
     else if (hit.kind === "want") {
       ui.record = "keeper";
       save();
@@ -3892,6 +4027,7 @@ function cognitionBlock(a) {
 }
 
 function openSheet(id) {
+  closeMindActions(false);
   closeRadial();
   const a = agentById(world, id);
   if (!a || a.retired) return;
@@ -3996,6 +4132,7 @@ function agentCard(a) {
     '<div class="doing">' + esc(doingLine(a)) + "</div>" +
     '<div class="holders" style="margin-top:8px">' + tieLine + "</div>" +
     '<div class="row card-btns">' +
+    '<button class="btn sm primary act-intervene">Act</button>' +
     '<button class="btn sm act-open">Dossier</button>' +
     '<button class="btn sm act-rename">Rename</button>' +
     '<button class="btn sm danger act-retire">Retire</button>' +
@@ -4008,6 +4145,7 @@ function agentCard(a) {
   });
   div.querySelector(".head-row").addEventListener("click", () => openSheet(a.id));
   div.querySelector(".act-open").addEventListener("click", () => openSheet(a.id));
+  div.querySelector(".act-intervene").addEventListener("click", () => openMindActions(a.id));
   div.querySelector(".act-rename").addEventListener("click", () => {
     const name = prompt("Rename " + a.name + ":", a.name);
     if (name && name.trim()) {
@@ -4425,6 +4563,7 @@ function followThread(kind, target) {
 
 function switchTab(name) {
   closeRadial();
+  closeMindActions(false);
   credit("tab", name);
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".screen").forEach(s => s.classList.toggle("active", s.id === "screen-" + name));
@@ -4455,6 +4594,11 @@ function renderAll() {
   const selected = ui.selectedId ? agentById(world, ui.selectedId) : null;
   if (selected && !$("mind-sheet").classList.contains("hidden")) {
     $("sheet-cognition").innerHTML = cognitionBlock(selected);
+  }
+  if (selected && !selected.retired && !$("mind-actions").classList.contains("hidden")) {
+    renderMindActions(selected);
+  } else if ((!selected || selected.retired) && !$("mind-actions").classList.contains("hidden")) {
+    closeMindActions(false);
   }
   // The record can be hundreds of cards long; there is no reason to rebuild it
   // for a screen nobody is looking at. Opening the tab re-renders on demand.
@@ -4586,6 +4730,41 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("sheet-ties").addEventListener("click", ev => {
     const button = /** @type {HTMLElement|null} */ (ev.target)?.closest(".follow-pair-thread");
     if (button) followThread("pair", button.dataset.a + "|" + button.dataset.b);
+  });
+  $("mind-action-close").addEventListener("click", () => closeMindActions());
+  $("mind-action-backdrop").addEventListener("click", () => closeMindActions());
+  $("mind-action-dossier").addEventListener("click", () => {
+    if (ui.selectedId) openSheet(ui.selectedId);
+  });
+  $("mind-action-list").addEventListener("click", ev => {
+    const button = /** @type {HTMLElement|null} */ (ev.target)?.closest("[data-mind-act]");
+    if (!button || /** @type {HTMLButtonElement} */ (button).disabled) return;
+    const a = agentById(world, ui.selectedId);
+    if (!a || a.retired) { closeMindActions(); return; }
+    const action = button.dataset.mindAct;
+    if (action === "talk") {
+      closeMindActions(false);
+      switchTab("messages");
+      openChat(a.id);
+      return;
+    }
+    if (action === "blessing") tryIntervene("blessing", { agentId: a.id });
+    else if (action === "omen") tryIntervene("omen", { regionId: a.regionId });
+    else if (action === "apparition") {
+      const dilemma = (world.charter?.dilemmas || []).find(d => d.status === "open" && d.partyIds.includes(a.id));
+      if (dilemma) tryIntervene("apparition", { dilemmaId: dilemma.id });
+    }
+  });
+  document.addEventListener("keydown", ev => {
+    const sheet = $("mind-actions");
+    if (sheet.classList.contains("hidden")) return;
+    if (ev.key === "Escape") { ev.preventDefault(); closeMindActions(); return; }
+    if (ev.key !== "Tab") return;
+    const focusable = [...sheet.querySelectorAll("button:not(:disabled)")];
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
   });
   $("record-pane").addEventListener("click", ev => {
     const target = /** @type {HTMLElement|null} */ (ev.target);

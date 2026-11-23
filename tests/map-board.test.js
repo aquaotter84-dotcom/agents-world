@@ -288,7 +288,7 @@ test("the menu disables what the world cannot currently honour, and enables what
   } finally { restore(); }
 });
 
-test("a tap still opens a dossier, and the radial closes when anything else takes over", async () => {
+test("a plain tap closes the radial when anything else takes over", async () => {
   const { window, document: doc, restore } = await bootApp();
   try {
     const cv = $(doc, "#world-canvas");
@@ -302,6 +302,79 @@ test("a tap still opens a dossier, and the radial closes when anything else take
     cv.dispatchEvent(new Mouse("mousedown", { clientX: 40, clientY: 40, bubbles: true }));
     cv.dispatchEvent(new Mouse("mouseup", { clientX: 40, clientY: 40, bubbles: true }));
     assert.ok(menu.classList.contains("hidden"), "the menu should not linger");
+  } finally { restore(); }
+});
+
+
+test("tapping a mind opens real actions, quotes their effects, and answers on the map", async () => {
+  const { createWorld, serializeWorld, REGIONS } = await import("../engine/index.js");
+  const fixture = createWorld({ seed: 4245 });
+  const agent = fixture.agents[0];
+  const beforeInfluence = fixture.charter.influence;
+  const beforeMeaning = agent.needs.meaning;
+  const saved = {
+    world: serializeWorld(fixture), settings: {}, chats: {}, chatRoles: {}, ui: {},
+    keeper: { marks: [], xp: 0 }, lastSeenAt: Date.now()
+  };
+  const { window, document: doc, restore } = await bootApp({ savedState: saved });
+  try {
+    const region = REGIONS.find(r => r.id === agent.regionId);
+    if (!region) throw new Error("the fixture mind must have a real region");
+    let hash = 0;
+    for (const c of String(agent.id)) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+    const dx = (hash % 13) - 6, dy = ((hash >> 4) % 13) - 6;
+    const x = ((region.x + dx) / 100) * SIDE;
+    const y = ((region.y + dy) / 100) * SIDE;
+    const cv = $(doc, "#world-canvas");
+    cv.dispatchEvent(new window.MouseEvent("mousedown", { clientX: x, clientY: y, bubbles: true }));
+    cv.dispatchEvent(new window.MouseEvent("mouseup", { clientX: x, clientY: y, bubbles: true }));
+
+    const sheet = $(doc, "#mind-actions");
+    assert.ok(!sheet.classList.contains("hidden"), "a plain tap opens the character action sheet");
+    assert.ok($(doc, "#mind-sheet").classList.contains("hidden"), "the full dossier does not replace the choice");
+    assert.match(text(doc, "mind-action-head"), new RegExp(agent.name));
+    assert.match(text(doc, "mind-action-context"), /Feeling.*Needs.*Strongest tie/s);
+    const blessing = $(doc, '[data-mind-act="blessing"]');
+    assert.equal(blessing.disabled, false);
+    assert.match(blessing.textContent, /5 influence/);
+    assert.match(blessing.textContent, /\+35% wall work for 48 ticks/);
+    blessing.click();
+
+    assert.ok(sheet.classList.contains("hidden"), "confirming the act returns the keeper to the world");
+    assert.match(text(doc, "map-reaction"), new RegExp(agent.name + " feels the light"));
+    assert.ok(!$(doc, "#map-reaction").classList.contains("hidden"), "the response appears where the act landed");
+    const after = JSON.parse(JSON.parse(doc.defaultView.localStorage.getItem("agentsworld.v2")).world);
+    const afterAgent = after.agents.find((/** @type {any} */ a) => a.id === agent.id);
+    assert.equal(after.divine.interventions.at(-1).cost, 5, "the preview's price is the engine's charge");
+    assert.equal(after.charter.influence, beforeInfluence - 5 + 2, "the completed daily trial then returns its 2-influence reward");
+    assert.ok(afterAgent.needs.meaning > beforeMeaning, "the real mind changes, not just the interface");
+    assert.equal(after.divine.interventions.at(-1).agentId, agent.id, "the sign belongs to the tapped mind");
+
+    // The same target cannot be lit twice, and the sheet explains that in place.
+    cv.dispatchEvent(new window.MouseEvent("mousedown", { clientX: x, clientY: y, bubbles: true }));
+    cv.dispatchEvent(new window.MouseEvent("mouseup", { clientX: x, clientY: y, bubbles: true }));
+    const again = $(doc, '[data-mind-act="blessing"]');
+    assert.equal(again.disabled, true);
+    assert.match(again.textContent, /already carrying your light/);
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert.ok(sheet.classList.contains("hidden"), "Escape dismisses the sheet");
+  } finally { restore(); }
+});
+
+test("character actions are keyboard-reachable from Minds, and talk opens a real conversation", async () => {
+  const { document: doc, restore } = await bootApp();
+  try {
+    const card = $(doc, "#agents-list .agent-card");
+    const name = card.querySelector(".aname").textContent.trim().split(/\s+/)[0];
+    card.querySelector(".act-intervene").click();
+    assert.ok(!$(doc, "#mind-actions").classList.contains("hidden"), "the Act button needs no canvas precision");
+    const talk = $(doc, '[data-mind-act="talk"]');
+    assert.match(talk.textContent, /no influence/);
+    talk.click();
+    assert.ok($(doc, "#screen-messages").classList.contains("active"), "the conversation screen opens");
+    assert.ok($(doc, "#mind-actions").classList.contains("hidden"));
+    assert.match(text(doc, "chat-peer"), new RegExp(name));
+    assert.ok(!$(doc, "#chat-view").classList.contains("hidden"), "the real chat view is ready");
   } finally { restore(); }
 });
 

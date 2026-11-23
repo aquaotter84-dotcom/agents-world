@@ -36,6 +36,7 @@
       <div id="map">
         <canvas id="world-canvas"></canvas>
         <div id="map-plate"><span id="map-day">Day 1</span><span id="map-phase">dawn</span></div>
+        <div id="map-reaction" class="hidden" role="status" aria-live="polite"></div>
         <button id="btn-create" title="Create a mind">+ Create</button>
         <div id="radial-menu" class="hidden" role="menu" aria-label="What to do about this mind"></div>
       </div>
@@ -60,7 +61,7 @@
         <div id="timeline"></div>
         <p id="timeline-note" class="note">The last day, one tick at a time. Tap any of it to watch it again from there.</p>
       </div>
-      <p id="map-hint">Tap a mind to know them. Hold the board to shape their fate.</p>
+      <p id="map-hint">Tap a mind to act. Hold the board for every keeper move.</p>
 
       <div id="activity-feed"></div>
       <button id="more-feed" class="btn ghost">See the whole record →</button>
@@ -206,6 +207,17 @@
     <button data-tab="admin" class="tab"><span class="ticon">▦</span>Admin</button>
   </nav>
 </div>
+
+<!-- Direct character actions: the map is the way into the real simulation -->
+<div id="mind-action-backdrop" class="hidden"></div>
+<section id="mind-actions" class="hidden" role="dialog" aria-modal="true" aria-labelledby="mind-action-name">
+  <button id="mind-action-close" class="mind-action-close" aria-label="Close character actions">×</button>
+  <div id="mind-action-head"></div>
+  <p id="mind-action-now"></p>
+  <div id="mind-action-context"></div>
+  <div id="mind-action-list"></div>
+  <button id="mind-action-dossier" class="btn ghost">Know their whole story →</button>
+</section>
 
 <!-- Mind dossier -->
 <div id="sheet-backdrop" class="hidden"></div>
