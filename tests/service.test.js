@@ -49,8 +49,11 @@ test("the dev server serves the service's world read-only, and reports when ther
   try {
     await waitFor(async () => (await fetch(base + "/")).ok);
 
-    // No service has written anything yet.
-    assert.equal((await fetch(base + "/api/world")).status, 404);
+    // No service is a normal empty state, not a browser console error.
+    const emptyWorld = await fetch(base + "/api/world");
+    assert.equal(emptyWorld.status, 204);
+    assert.equal(await emptyWorld.text(), "");
+    assert.equal((await fetch(base + "/api/status")).status, 204);
 
     // A world appears; the endpoint serves it verbatim.
     const payload = JSON.stringify({ seed: 3, clock: { tick: 40, day: 2 }, agents: [] });

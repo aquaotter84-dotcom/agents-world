@@ -12,7 +12,7 @@
 # The tradeoffs between hosts are written up in the README, under
 # "The always-on world".
 
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /world
 

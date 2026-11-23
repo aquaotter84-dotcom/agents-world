@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JSDOM } from "jsdom";
+import { ACHIEVEMENTS } from "../app/keeper.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const html = await readFile(resolve(ROOT, "app/index.html"), "utf8");
@@ -1037,7 +1038,7 @@ test("the keeper earns rank by what they do, and every mind has a face on screen
     // The Keeper view lists every achievement, unlocked or not.
     const panel = doc.querySelector("#record-pane .keeper-panel");
     assert.ok(panel, "the Keeper view renders");
-    assert.equal(panel.querySelectorAll(".ach").length, 10);
+    assert.equal(panel.querySelectorAll(".ach").length, ACHIEVEMENTS.length);
 
     // Each mind is drawn as a portrait, not an emoji in a circle.
     const portraits = doc.querySelectorAll("#agents-list .portrait svg");

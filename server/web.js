@@ -94,7 +94,13 @@ async function serveService(req, res, pathname, savePath) {
     else res.end(body);
   } catch (err) {
     const missing = err instanceof Error && "code" in err && err.code === "ENOENT";
-    send(res, missing ? 404 : 500, "text/plain; charset=utf-8", missing ? "No background world yet" : "Server error");
+    if (missing) {
+      // No runner is an ordinary local-mode state, not a failed resource load.
+      res.writeHead(204, { "Cache-Control": "no-store" });
+      res.end();
+      return;
+    }
+    send(res, 500, "text/plain; charset=utf-8", "Server error");
   }
 }
 

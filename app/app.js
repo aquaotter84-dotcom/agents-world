@@ -31,7 +31,7 @@ import {
   secretTextFor, privateSecretsHeld, secretsAbout, preoccupations,
   levelProgress, pressingNeed,
   ruleOnPetition, resolveDilemma, actOnWhisper, describeRule, influenceWord,
-  RULE_KINDS, precedentFor, feudStage,
+  moveInfluence, RULE_KINDS, precedentFor, feudStage,
   wantSummary, wantLog, WANT_LABELS, wantVerdict,
   pendingFunerals, recentMemorials, mournDeparture,
   interventionOptions, canIntervene, performIntervention, recentInterventions,
@@ -55,6 +55,9 @@ import {
 import { arm as armSound, isSoundOn, setSoundOn, sting } from "./sound.js";
 import { boardSigils, mindGlyph, feudArcs, constellations, projectPalette, keeperRing, mourningMarks, divineMarks } from "./board.js";
 import { digestMark, awayDigest, digestLine } from "./digest.js";
+import {
+  emptyTrials, normalizeTrials, trialSummary, recordTrialAction, TRIAL_COMPLETION_BONUS
+} from "./trials.js";
 
 const STORE_KEY = "agentsworld.v2";
 /**
@@ -110,6 +113,8 @@ let lastSeenAt = Date.now();
 /** The tick the world had reached the last time it was saved, for the replay. */
 let lastSeenTick = null;
 let keeper = emptyKeeper();
+/** @type {ReturnType<typeof emptyTrials>|null} */
+let trials = null;
 /** The last "while you were away" digest, kept until the keeper has read it. */
 let lastDigest = null;
 
@@ -138,7 +143,7 @@ function serviceHost() {
 async function probeService() {
   try {
     const r = await fetch(serviceBase() + "/api/world", { cache: "no-store" });
-    if (!r.ok) return null;
+    if (!r.ok || r.status === 204) return null;
     return deserializeWorld(await r.text());
   } catch (e) {
     return null; // no service, or not served over http at all (the APK)
@@ -236,13 +241,14 @@ async function checkServiceNow() {
 }
 
 function save() {
+  trials = normalizeTrials(trials, world);
   // The world has now been seen up to here: this is the mark every replay is
   // measured from, so it is kept in step with what is written down.
   lastSeenTick = world.clock.tick;
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
       world: serializeWorld(world),
-      settings, chats, chatRoles, retold, ui, keeper, lastSeenAt: Date.now(), digest: lastDigest,
+      settings, chats, chatRoles, retold, ui, keeper, trials, lastSeenAt: Date.now(), digest: lastDigest,
       // Where the world had got to the last time anybody looked. The replay is
       // measured from here, so a keeper coming back to a world that ran on gets
       // to see the ticks they missed rather than being told about them.
@@ -279,6 +285,7 @@ function load() {
       retold = s.retold && typeof s.retold === "object" ? s.retold : {};
       ui = Object.assign(ui, s.ui);
       keeper = normalizeKeeper(s.keeper);
+      trials = normalizeTrials(s.trials, world);
       lastSeenAt = s.lastSeenAt || Date.now();
       lastDigest = s.digest || null;
       lastSeenTick = Number.isFinite(s.lastSeenTick) ? s.lastSeenTick : null;
@@ -1454,6 +1461,160 @@ function renderKeeperStrip() {
       ? esc(k.next.remaining + " XP to " + k.next.title) + " · tap for the record"
       : "The highest rank. Tap for the record.") + "</div>";
 }
+
+/* ---------- daily trials: know → intervene → change the course ---------- */
+function neediestMind() {
+  return livingAgents(world).slice().sort((a, b) => {
+    const need = agent => Object.values(agent.needs || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    return need(a) - need(b);
+  })[0] || null;
+}
+
+/** A small, visible payoff for a real act; never a substitute for the act. */
+function showTrialReward(title, xp, influence, bonus) {
+  const old = $("trial-reward");
+  if (old) old.remove();
+  const el = document.createElement("div");
+  el.id = "trial-reward";
+  el.className = "trial-reward" + (bonus ? " bonus" : "");
+  el.setAttribute("role", "status");
+  el.innerHTML = '<span class="trial-reward-check">✓</span><strong>' + esc(title) + '</strong>' +
+    '<span>' + (xp ? "+" + xp + " XP" : "Recorded") + (influence ? " · +" + influence + " influence" : "") + "</span>";
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1800);
+  sting(bonus ? "moment" : "beat", { settings });
+}
+
+/** Report a successful real-world act and pay each daily reward exactly once. */
+function trackTrial(action) {
+  trials = normalizeTrials(trials, world);
+  const result = recordTrialAction(trials, world, action);
+  if (!result.completed.length) return false;
+  let xp = 0;
+  let influence = 0;
+  let title = result.completed[0].title;
+  for (const trial of result.completed) {
+    if (award(keeper, "trial", trials.day + ":" + trial.id)) {
+      xp += trial.xp;
+      influence += moveInfluence(world.charter, trial.influence);
+    }
+  }
+  if (result.bonus && award(keeper, "trialBonus", trials.day)) {
+    xp += TRIAL_COMPLETION_BONUS.xp;
+    influence += moveInfluence(world.charter, TRIAL_COMPLETION_BONUS.influence);
+    title = "Three before nightfall";
+  }
+  save();
+  renderTrials();
+  renderKeeperStrip();
+  renderHand();
+  showTrialReward(title, xp, influence, result.bonus);
+  return true;
+}
+
+function renderTrials() {
+  const el = $("trial-card");
+  if (!el) return;
+  trials = normalizeTrials(trials, world);
+  const summary = trialSummary(world, trials);
+  const pips = summary.trials.map((trial, index) =>
+    '<span class="trial-pip ' + (trial.done ? "done" : summary.active?.id === trial.id ? "current" : "") +
+    '" title="' + esc(trial.title) + '">' + (trial.done ? "✓" : index + 1) + "</span>").join("");
+  if (!summary.active) {
+    el.className = "card trial-card complete";
+    el.innerHTML = '<div class="trial-kicker"><span>Daily thread · Day ' + world.clock.day + '</span><span>3/3</span></div>' +
+      '<div class="trial-pips">' + pips + '</div>' +
+      '<h2>The world feels your hand.</h2>' +
+      '<p>All three trials are complete. The chain bonus is yours; a new thread begins tomorrow.</p>' +
+      '<div class="trial-foot"><span>+' + TRIAL_COMPLETION_BONUS.xp + ' XP · +' + TRIAL_COMPLETION_BONUS.influence +
+      ' influence bonus</span><button class="btn ghost trial-record">Keeper record</button></div>';
+    return;
+  }
+  const trial = summary.active;
+  el.className = "card trial-card";
+  el.innerHTML = '<div class="trial-kicker"><span>Daily thread · Day ' + world.clock.day + '</span><span>' +
+    summary.completed + "/" + summary.total + ' complete</span></div>' +
+    '<div class="trial-pips">' + pips + '</div>' +
+    '<h2>' + esc(trial.title) + '</h2>' +
+    '<p>' + esc(trial.task) + '</p>' +
+    '<div class="trial-foot"><span>+' + trial.xp + ' XP · +' + trial.influence + ' influence</span>' +
+    '<button class="btn primary trial-go" data-trial="' + esc(trial.id) + '">' + esc(trial.act) + '</button></div>';
+}
+
+/** The one-tap path into the current objective, always through a real system. */
+function runActiveTrial() {
+  trials = normalizeTrials(trials, world);
+  const active = trialSummary(world, trials).active;
+  if (!active) {
+    ui.record = "keeper";
+    switchTab("record");
+    return;
+  }
+  if (active.id === "dossier") {
+    const mind = neediestMind();
+    if (mind) openSheet(mind.id);
+    return;
+  }
+  if (active.id === "bless-mind") {
+    const candidates = livingAgents(world).slice().sort((a, b) => {
+      const need = agent => Object.values(agent.needs || {}).reduce((sum, value) => sum + (Number(value) || 0), 0);
+      return need(a) - need(b);
+    });
+    const target = candidates.find(agent => canIntervene(world, "blessing", { agentId: agent.id }).ok);
+    if (target) tryIntervene("blessing", { agentId: target.id });
+    else toast("No mind can take another blessing right now. Let the world turn a little.");
+    return;
+  }
+  if (active.id === "bless-work") {
+    tryIntervene("blessing", { work: true });
+    return;
+  }
+  if (active.id === "omen") {
+    const hottest = feudArcs(world)[0];
+    const holder = hottest ? agentById(world, hottest.a) : null;
+    const ids = [holder?.regionId, ...REGIONS.map(region => region.id)].filter((id, index, all) => id && all.indexOf(id) === index);
+    const regionId = ids.find(id => canIntervene(world, "omen", { regionId: id }).ok);
+    if (regionId) tryIntervene("omen", { regionId });
+    else toast("Every region is already under a sign. Let one fade, then try again.");
+    return;
+  }
+  if (active.id === "ruling") {
+    ui.record = "charter";
+    switchTab("record");
+    renderRecord();
+    return;
+  }
+  if (active.id === "chronicle") {
+    ui.record = "chronicle";
+    switchTab("record");
+    trackTrial("chronicle");
+    return;
+  }
+  if (active.id === "thread") {
+    const hottest = feudArcs(world)[0];
+    if (hottest) followThread("pair", hottest.a + "|" + hottest.b);
+    else {
+      const mind = neediestMind();
+      if (mind) followThread("mind", mind.id);
+    }
+    return;
+  }
+  if (active.id === "create") {
+    openCreate();
+    return;
+  }
+  if (active.id === "camp") {
+    const option = settlementActOptions(world).find(item => item.enabled);
+    if (!option) { toast("The camp needs no emergency hand right now. Its own people can carry this moment."); return; }
+    const result = performSettlementAct(world, option.kind);
+    if (result.ok) {
+      trackTrial("camp");
+      toast(esc(result.effect || "The camp feels your hand."));
+      save(); renderAll();
+    } else toast(result.reason || "The camp cannot take that act right now.");
+  }
+}
+
 /**
  * One meter of the keeper's want, as a bar, a number and the act that last
  * moved it. Shared by the world screen and the keeper record so the two can
@@ -1637,6 +1798,9 @@ function tryIntervene(kind, target) {
     toast(result.reason || "You cannot do that.");
     return false;
   }
+  trackTrial(kind === "blessing"
+    ? (result.intervention.target === "work" ? "bless-work" : "bless-mind")
+    : kind === "apparition" ? "ruling" : kind);
   toast("Your " + esc(INTERVENTION_INFO[kind].name.toLowerCase()) + " lands over " +
     esc(targetLabel(target)) + " — " + esc(result.intervention.effect));
   save();
@@ -1788,6 +1952,7 @@ function renderCamp() {
 function foundNextCamp() {
   const boons = world.settlement?.legacy?.boons || [];
   world = freshWorld();
+  trials = null;
   activateSettlement(world, { boons });
   chats = {};
   ui = { selectedId: null, chatId: null, record: ui.record, threadKind: "mind", threadTarget: null };
@@ -3731,6 +3896,7 @@ function openSheet(id) {
   const a = agentById(world, id);
   if (!a || a.retired) return;
   credit("dossier", id);
+  trackTrial("dossier");
   ui.selectedId = id;
   save();
   renderStats();
@@ -3900,6 +4066,7 @@ function doCreate() {
   a.userCreated = true;
   world.agents.push(a);
   logEvent(world, { kind: "act", agentId: a.id, text: a.name + " arrived in the world — a " + cls + ", " + persona.toLowerCase() + ".", significance: 0.5, regionId: a.regionId });
+  trackTrial("create");
   save(); renderAll();
   closeCreate();
   $("new-name").value = ""; $("new-backstory").value = "";
@@ -4200,6 +4367,7 @@ async function restoreWorldBackup(file) {
 
     stopReplay();
     world = restored;
+    trials = null;
     lastSeenTick = null;
     chats = {};
     chatRoles = {};
@@ -4229,6 +4397,7 @@ function resetWorld() {
   if (serviceMode) { toast("This world is kept by the background service. Stop it and delete data/world.json to start over."); return; }
   if (!confirm("Reset the world? All minds, chats, and events return to the seed state.")) return;
   world = freshWorld();
+  trials = null;
   chats = {};
   ui = { selectedId: null, chatId: null, record: ui.record, threadKind: "mind", threadTarget: null };
   mapFx.fxInit = false;
@@ -4249,6 +4418,7 @@ function followThread(kind, target) {
   ui.threadKind = kind;
   ui.threadTarget = target;
   ui.record = "threads";
+  trackTrial("thread");
   save();
   switchTab("record");
 }
@@ -4273,6 +4443,7 @@ function renderAdminWorld() {
 function renderAll() {
   credit("day", world.clock.day);
   renderKeeperStrip();
+  renderTrials();
   renderNow(); renderWant(); renderHand(); renderStats(); renderMap(); noteMapFx(); renderProject(); renderCamp(); renderFeed();
   renderToday();
   renderTimeline();
@@ -4293,18 +4464,17 @@ function renderAll() {
 
 /* ---------- first run ---------- */
 function showWelcome(gaveHistory) {
-  $("welcome-card").querySelector("h3").textContent =
-    "Nine minds are living in " + worldNameFor(world.seed) + ".";
-  $("welcome-body").textContent = gaveHistory
-    ? "This world has already been running without you — two days of it, in the Chronicle. Minds " +
-      "wander, work at ambitions, gossip, keep secrets and fall out with each other. You are the " +
-      "keeper: tap anyone on the map to read their dossier, or open the Record to catch up on what " +
-      "you missed. No API key required; one just lets a language model write their biggest moments " +
-      "in their own voice."
-    : "Minds wander, work at ambitions, gossip, keep secrets and fall out with each other, and the " +
-      "world writes its own diary as the days close. Tap anyone on the map to read their dossier, or " +
-      "open the Record for the story so far. No API key required; one just lets a language model " +
-      "write their biggest moments in their own voice.";
+  const count = livingAgents(world).length;
+  const feud = worldPulse(world).feuds[0];
+  const situation = feud
+    ? feud.a.name + " and " + feud.b.name + " are at odds."
+    : "Old secrets are already moving between them.";
+  const work = world.project?.status === "active"
+    ? " The North Wall is " + Math.round(world.project.progress) + "% raised."
+    : "";
+  $("welcome-card").querySelector("h3").textContent = count + " minds. One world. Your move.";
+  $("welcome-body").textContent = situation + work + (gaveHistory ? " They have two days of history." : "") +
+    " Start with three acts: know a mind, leave a blessing, and cool a quarrel. Every choice changes the real world.";
   $("welcome").classList.remove("hidden");
   try { localStorage.setItem("agentsworld.welcomed", "1"); } catch (e) { /* private mode */ }
 }
@@ -4405,7 +4575,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll(".tab").forEach(t =>
     t.addEventListener("click", () => switchTab(t.dataset.tab)));
   document.querySelectorAll(".rtab").forEach(t =>
-    t.addEventListener("click", () => { ui.record = t.dataset.view; save(); renderRecord(); }));
+    t.addEventListener("click", () => {
+      ui.record = t.dataset.view;
+      if (ui.record === "chronicle") trackTrial("chronicle");
+      save(); renderRecord();
+    }));
   $("sheet-follow-mind").addEventListener("click", () => {
     if (ui.selectedId) followThread("mind", ui.selectedId);
   });
@@ -4421,6 +4595,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (enact) {
       const result = ruleOnPetition(world, /** @type {any} */ (enact).dataset.id, "enact");
       if (!result.ok) toast(result.reason || "You cannot enact that.");
+      else trackTrial("ruling");
       save();
       renderCharter(/** @type {any} */ ($("record-pane")));
       renderRecord();
@@ -4431,6 +4606,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (refuse) {
       const result = ruleOnPetition(world, /** @type {any} */ (refuse).dataset.id, "refuse");
       if (!result.ok) toast(result.reason || "You cannot rule on that.");
+      else trackTrial("ruling");
       save();
       renderRecord();
       renderWant();
@@ -4441,6 +4617,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const el = /** @type {any} */ (settle);
       const result = resolveDilemma(world, el.dataset.id, el.dataset.choice);
       if (!result.ok) toast(result.reason || "You cannot settle that.");
+      else trackTrial("ruling");
       save();
       renderRecord();
       renderWant();
@@ -4450,6 +4627,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (whisper) {
       const result = actOnWhisper(world, /** @type {any} */ (whisper).dataset.id);
       if (!result.ok) toast(result.reason || "You cannot act on that.");
+      else trackTrial("ruling");
       save();
       renderRecord();
       renderWant();
@@ -4495,12 +4673,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("more-feed").addEventListener("click", () => { switchTab("record"); ui.record = "feed"; renderRecord(); });
   $("beat-banner").addEventListener("click", () => { if (replay) skipReplay(); else hideBeat(); });
   $("keeper-strip").addEventListener("click", () => { ui.record = "keeper"; save(); switchTab("record"); });
+  $("trial-card").addEventListener("click", ev => {
+    const target = /** @type {HTMLElement|null} */ (ev.target);
+    if (target?.closest(".trial-record")) {
+      ui.record = "keeper";
+      save(); switchTab("record");
+      return;
+    }
+    if (target?.closest(".trial-go")) runActiveTrial();
+  });
   $("camp-card").addEventListener("click", ev => {
     const target = /** @type {HTMLElement|null} */ (ev.target);
     const actBtn = target?.closest("[data-camp-act]");
     if (actBtn) {
       const kind = /** @type {any} */ (actBtn).dataset.campAct;
       const result = performSettlementAct(world, kind);
+      if (result.ok) trackTrial("camp");
       toast(result.ok ? esc(result.effect || "It is done.") : (result.reason || "You cannot do that."));
       save(); renderAll();
       return;
@@ -4618,10 +4806,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("btn-advance").addEventListener("click", () => advance(48));
   $("btn-advance-week").addEventListener("click", () => advance(336));
   $("btn-reset").addEventListener("click", resetWorld);
-  $("welcome-go").addEventListener("click", () => { $("welcome").classList.add("hidden"); });
+  $("welcome-go").addEventListener("click", () => {
+    $("welcome").classList.add("hidden");
+    runActiveTrial();
+  });
   $("welcome-fast").addEventListener("click", () => {
     $("welcome").classList.add("hidden");
-    advance(336);
+    toast("Watch as long as you like. Your first trial waits at the top of the World screen.");
   });
 
   renderAll();

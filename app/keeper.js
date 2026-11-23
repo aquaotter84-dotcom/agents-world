@@ -20,7 +20,9 @@ export const XP = Object.freeze({
   chronicle: 4,  // a chronicle entry read
   scene: 3,      // a conversation overheard
   betrayal: 6,   // a betrayal witnessed in the record
-  day: 10        // a new day of the world kept
+  day: 10,       // a new day of the world kept
+  trial: 10,     // one daily trial completed through a real world act
+  trialBonus: 20 // all three trials completed in one world day
 });
 
 /** Ranks, lowest first. A keeper holds the highest rank whose XP they have reached. */
@@ -48,7 +50,9 @@ export const ACHIEVEMENTS = Object.freeze([
   { id: "chronicler", title: "Chronicler", desc: "Read seven entries of the Chronicle.", test: t => t.chronicle >= 7 },
   { id: "every-corner", title: "Every Corner", desc: "Visit every screen of the app.", test: t => t.tabs >= 5 },
   { id: "week-kept", title: "A Week Kept", desc: "See seven days of the world close.", test: t => t.days >= 7 },
-  { id: "month-kept", title: "A Month Kept", desc: "See thirty days of the world close.", test: t => t.days >= 30 }
+  { id: "month-kept", title: "A Month Kept", desc: "See thirty days of the world close.", test: t => t.days >= 30 },
+  { id: "first-trial", title: "The Keeper’s Hand", desc: "Complete your first daily trial.", test: t => t.trials >= 1 },
+  { id: "three-before-nightfall", title: "Three Before Nightfall", desc: "Complete a full three-trial day.", test: t => t.chains >= 1 }
 ]);
 
 /**
@@ -61,6 +65,8 @@ export const ACHIEVEMENTS = Object.freeze([
  * @property {number} tabs
  * @property {number} days
  * @property {number} minds
+ * @property {number} trials
+ * @property {number} chains
  */
 
 /** @returns {{ marks: string[], xp: number }} */
@@ -122,7 +128,9 @@ export function tallies(keeper, mindCount) {
     chronicle: count("chronicle"),
     tabs: count("tab"),
     days,
-    minds: mindCount
+    minds: mindCount,
+    trials: count("trial"),
+    chains: count("trialBonus")
   };
 }
 

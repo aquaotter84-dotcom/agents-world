@@ -12,6 +12,7 @@ A BluesMinds key changes the *voice*, not the world: with one, a language model 
 
 ## What landed in this pass
 
+- **A daily thread, not a checklist.** The opening teaches three real keeper acts in order: read the neediest mind's dossier, bless someone, and cool a quarrel with an omen. Later world days deal three eligible objectives across understanding, intervention and longer-term change. Each act pays XP and influence once; finishing all three pays a chain bonus. The objectives route into the existing dossiers, interventions, story threads, rulings, camp and chronicle systems — they never invent a separate mock game state.
 - **Self-running world.** Ticks no longer require a key. Header shows `LIVE` (model attached) or `SELF-RUNNING` (engine only).
 - **It opens mid-story.** A new world is seeded with 108 ticks — about two and a half days — so day one already has a Chronicle, a few secrets and a couple of grudges.
 - **Catch-up.** Time the app spent closed is paid back on the next launch by running the same deterministic simulation forward (capped at ten world days / eight hours), then reported in a toast. No fake "while you were away" text: those days really happened in the engine and are in the record.
@@ -106,6 +107,7 @@ Why the old failure mode is unreachable now: the prompt offers exactly the subse
 - `engine/` — the simulation: pure, deterministic, no I/O, no wall clock (including the keeper's own systems: `want`, `charter`, `mourning`, `divine`)
 - `server/` — `index.js` (the headless runner), `run-loop.js` (the tick loop both runners share: a tick never waits on a model call), `world-file.js` (one atomic save, wherever a world is written), `service.js` (the always-on world: the runner *and* the web server in one process), `web.js` (the app and the read-only `/api/world` + `/api/status`, shared with the dev server), the model client and the prompt builder
 - `app/` — vanilla web app, no build step (`index.html`, `styles.css`, `app.js`); the engine is vendored into `app/vendor/` by `tools/sync-vendor.sh`, which CI runs before every build
+- `app/trials.js` — the daily thread: eligible objective decks, first-run teaching order, progress, one-time rewards and the full-chain bonus. Pure and DOM-free
 - `app/digest.js` — "while you were away": a mark of a world, and the difference between it and the world that now exists. Pure; the app renders it, it never invents it
 - `app/director.js` — the director: what the world is doing (the pulse), how fast the clock should run, which storylines are in flight, which lines are events and which are the simulation keeping its books, what today has done, and what a replay plays. Pure and dependency-free, so `tests/director.test.js` runs all of it against real engine worlds
 - `app/sound.js` — chimes and buzzes, generated on the device (two sine tones and an envelope), gated on the keeper's switch and on a gesture, and incapable of throwing
@@ -177,4 +179,5 @@ fails if `app/vendor/` has drifted from `engine/`.
 
 To try the web app locally, `npm run dev` and open `http://localhost:4321`. Engine
 edits need `tools/sync-vendor.sh` (or `npm run dev -- --sync`) to reach the app under
-`app/vendor/`.
+`app/vendor/`. Use Node 22.22.2 or newer for development and the jsdom UI tests;
+`npm run typecheck` and `npm test` cover the engine, progression and real app screens.
